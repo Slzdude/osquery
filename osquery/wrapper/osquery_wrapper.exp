@@ -1,0 +1,7 @@
+_osquery_init
+_osquery_set_log_callback
+_osquery_set_event_callback
+_osquery_query
+_osquery_free_result
+_osquery_version
+_osquery_shutdown
