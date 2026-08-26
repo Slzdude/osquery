@@ -21,8 +21,9 @@ jobs:
     steps:
     - name: Free disk space
       run: |
-        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-        sudo apt-get purge -y 'clang-*' 'llvm-*' 'php*' 'mono-*' 'dotnet-*' google-chrome-stable firefox snapd || true
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+        sudo apt-get purge -y 'clang-*' 'llvm-*' 'php*' 'mono-*' 'dotnet-*' \
+          google-chrome-stable microsoft-edge-stable firefox snapd temurin-*-jdk || true
         sudo apt-get autoremove -y && sudo apt-get clean
         df -h
 
@@ -31,70 +32,194 @@ jobs:
         wget -q https://github.com/osquery/osquery-toolchain/releases/download/${{ env.OSQUERY_TOOLCHAIN_VERSION }}/osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz
         sudo tar xf osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz -C /usr/local
 
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y \
+          elfutils python3-psutil python3-six python3-wheel \
+          linux-headers-generic ccache
+
+    - name: Setup build paths
+      id: build_paths
+      run: |
+        mkdir -p workspace/build workspace/src workspace/ccache
+        echo "SOURCE=$(realpath workspace/src)" >> $GITHUB_OUTPUT
+        echo "BINARY=$(realpath workspace/build)" >> $GITHUB_OUTPUT
+        echo "CCACHE=$(realpath workspace/ccache)" >> $GITHUB_OUTPUT
+
     - name: Clone repository
       uses: actions/checkout@v4
       with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
 
+    - name: Fetch all tags
+      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
+      run: git fetch --tags --force
+
+    - name: Compute submodule hash
+      id: submodule_hash
+      run: echo "VALUE=$(git -C ${{ steps.build_paths.outputs.SOURCE }} submodule status --recursive | sha256sum | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+    - name: Restore submodule cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
+        key: gitmodules_linux_${{ steps.submodule_hash.outputs.VALUE }}
+        restore-keys: gitmodules_linux
+
     - name: Update submodules
+      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
       run: git submodule sync --recursive && git submodule update --init --recursive
 
+    - name: Restore ccache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.CCACHE }}
+        key: ccache_linux_wrapper
+
+    - name: Configure ccache
+      run: echo "CCACHE_CONFIGPATH=${{ steps.build_paths.outputs.SOURCE }}/ccache.conf" >> $GITHUB_ENV
+
     - name: Configure
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
       run: |
         cmake -G "Unix Makefiles" \
           -DOSQUERY_TOOLCHAIN_SYSROOT:PATH="/usr/local/osquery-toolchain" \
           -DCMAKE_BUILD_TYPE:STRING=Release \
           -DOSQUERY_BUILD_TESTS=OFF \
-          .
+          "${{ steps.build_paths.outputs.SOURCE }}"
 
     - name: Build wrapper
-      run: cmake --build . --target osquery_wrapper -j $(($(nproc) + 1))
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+      run: |
+        ccache --zero-stats
+        cmake --build . --target osquery_wrapper -j $(($(nproc) + 1))
+        ccache -s
 
     - name: Verify symbols
       run: |
-        nm -D osquery/osquery/libosquery_wrapper.so | grep -c " T osquery_" | grep -q "7"
+        nm -D ${{ steps.build_paths.outputs.BINARY }}/osquery/osquery/libosquery_wrapper.so | grep " T osquery_" | wc -l | grep -q "7"
         echo "✓ All 7 symbols exported"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: libosquery_wrapper-linux-x86_64
-        path: osquery/osquery/libosquery_wrapper.so
+        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/osquery/libosquery_wrapper.so
+
+    - name: Save submodule cache
+      if: github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
+        key: gitmodules_linux_${{ steps.submodule_hash.outputs.VALUE }}
+
+    - name: Save ccache
+      if: github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.build_paths.outputs.CCACHE }}
+        key: ccache_linux_wrapper_${{ github.sha }}
 
   build_macos:
     runs-on: macos-15
 
+    env:
+      MACOS_DEPLOYMENT_TARGET: "10.15"
+
     steps:
+    - name: Setup build paths
+      id: build_paths
+      run: |
+        mkdir -p workspace/build workspace/src workspace/ccache
+        echo "SOURCE=$(pwd)/workspace/src" >> $GITHUB_OUTPUT
+        echo "BINARY=$(pwd)/workspace/build" >> $GITHUB_OUTPUT
+        echo "CCACHE=$(pwd)/workspace/ccache" >> $GITHUB_OUTPUT
+
     - name: Clone repository
       uses: actions/checkout@v4
       with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
 
+    - name: Fetch all tags
+      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
+      run: git fetch --tags --force
+
+    - name: Install build dependencies
+      run: brew install ccache flex bison coreutils gnu-sed
+
+    - name: Compute submodule hash
+      id: submodule_hash
+      run: echo "VALUE=$(git -C ${{ steps.build_paths.outputs.SOURCE }} submodule status --recursive | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+    - name: Restore submodule cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
+        key: gitmodules_macos_${{ steps.submodule_hash.outputs.VALUE }}
+        restore-keys: gitmodules_macos
+
     - name: Update submodules
+      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
       run: git submodule sync --recursive && git submodule update --init --recursive
 
+    - name: Restore ccache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.CCACHE }}
+        key: ccache_macos_wrapper
+
     - name: Configure
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
       run: |
         cmake -G "Unix Makefiles" \
           -DCMAKE_OSX_ARCHITECTURES="arm64" \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}" \
           -DCMAKE_BUILD_TYPE:STRING=Release \
           -DOSQUERY_BUILD_TESTS=OFF \
-          .
+          "${{ steps.build_paths.outputs.SOURCE }}"
 
     - name: Build wrapper
-      run: cmake --build . --target osquery_wrapper -j $(($(sysctl -n hw.logicalcpu) + 1))
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+      run: |
+        ccache --zero-stats
+        cmake --build . --target osquery_wrapper -j $(($(sysctl -n hw.logicalcpu) + 1))
+        ccache -s
 
     - name: Verify symbols
       run: |
-        nm -g osquery/osquery/libosquery_wrapper.dylib | grep -c " T _osquery_" | grep -q "7"
+        nm -g ${{ steps.build_paths.outputs.BINARY }}/osquery/osquery/libosquery_wrapper.dylib | grep " T _osquery_" | wc -l | grep -q "7"
         echo "✓ All 7 symbols exported"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: libosquery_wrapper-macos-arm64
-        path: osquery/osquery/libosquery_wrapper.dylib
+        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/osquery/libosquery_wrapper.dylib
+
+    - name: Save submodule cache
+      if: github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
+        key: gitmodules_macos_${{ steps.submodule_hash.outputs.VALUE }}
+
+    - name: Save ccache
+      if: github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.build_paths.outputs.CCACHE }}
+        key: ccache_macos_wrapper_${{ github.sha }}
 
   build_windows:
     runs-on: windows-2022
@@ -105,45 +230,125 @@ jobs:
         git config --global core.autocrlf false
         git config --global core.symlinks true
 
+    - name: Setup build paths
+      id: build_paths
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path "w\build","w\src","w\sccache","w\downloads","w\install"
+        $base = (Get-Item .).FullName
+        echo "SOURCE=$base\w\src" >> $env:GITHUB_OUTPUT
+        echo "BINARY=$base\w\build" >> $env:GITHUB_OUTPUT
+        echo "SCCACHE=$base\w\sccache" >> $env:GITHUB_OUTPUT
+        echo "DOWNLOADS=$base\w\downloads" >> $env:GITHUB_OUTPUT
+        echo "INSTALL=$base\w\install" >> $env:GITHUB_OUTPUT
+
     - name: Clone repository
       uses: actions/checkout@v4
       with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
 
+    - name: Fetch all tags
+      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
+      run: git fetch --tags --force
+
+    - name: Compute submodule hash
+      id: submodule_hash
+      shell: powershell
+      run: |
+        $inputStr = (git -C "${{ steps.build_paths.outputs.SOURCE }}" submodule status --recursive) -join "`n"
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($inputStr)
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $hash = [BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace("-","").ToLower()
+        echo "VALUE=$hash" >> $env:GITHUB_OUTPUT
+
+    - name: Restore submodule cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}\.git\modules
+        key: gitmodules_windows_${{ steps.submodule_hash.outputs.VALUE }}
+        restore-keys: gitmodules_windows
+
     - name: Update submodules
+      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
       run: git submodule sync --recursive && git submodule update --init --recursive
 
-    - name: Install Ninja
+    - name: Install CMake
+      working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
+      shell: powershell
       run: |
-        choco install ninja -y
+        $ver = "3.21.4"
+        $short = ($ver.Split('.')[0..1] -join '.')
+        $folder = "cmake-$ver-windows-x86_64"
+        $url = "https://cmake.org/files/v$short/$folder.zip"
+        (New-Object System.Net.WebClient).DownloadFile($url, "$folder.zip")
+        7z x -o${{ steps.build_paths.outputs.INSTALL }} -y "$folder.zip"
+        echo "${{ steps.build_paths.outputs.INSTALL }}\$folder\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Install Ninja
+      working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
+      shell: powershell
+      run: |
+        $url = "https://github.com/ninja-build/ninja/releases/download/v1.10.0/ninja-win.zip"
+        (New-Object System.Net.WebClient).DownloadFile($url, "ninja-win.zip")
+        7z x -o${{ steps.build_paths.outputs.INSTALL }}\ninja -y ninja-win.zip
+        echo "${{ steps.build_paths.outputs.INSTALL }}\ninja" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Install sccache
+      working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
+      shell: powershell
+      run: |
+        $url = "https://github.com/osquery/sccache/releases/download/0.0.1-osquery/sccache-0.0.1-windows.7z"
+        (New-Object System.Net.WebClient).DownloadFile($url, "sccache-0.0.1-windows.7z")
+        7z x -o${{ steps.build_paths.outputs.INSTALL }}\sccache -y sccache-0.0.1-windows.7z
+        echo "${{ steps.build_paths.outputs.INSTALL }}\sccache" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Restore sccache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SCCACHE }}
+        key: sccache_windows_wrapper
 
     - name: Configure
       shell: cmd
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      env:
+        SCCACHE_DIR: ${{ steps.build_paths.outputs.SCCACHE }}
+        SCCACHE_CACHE_SIZE: "5G"
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        @echo on
         cmake -G Ninja ^
           -DCMAKE_C_COMPILER=cl.exe ^
           -DCMAKE_CXX_COMPILER=cl.exe ^
           -DCMAKE_BUILD_TYPE=Release ^
           -DOSQUERY_BUILD_TESTS=OFF ^
-          .
+          -DCMAKE_C_COMPILER_LAUNCHER="sccache.exe" ^
+          -DCMAKE_CXX_COMPILER_LAUNCHER="sccache.exe" ^
+          "${{ steps.build_paths.outputs.SOURCE }}"
 
     - name: Build wrapper
       shell: cmd
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      env:
+        SCCACHE_DIR: ${{ steps.build_paths.outputs.SCCACHE }}
+        SCCACHE_CACHE_SIZE: "5G"
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        @echo on
+        sccache.exe --zero-stats
         cmake --build . --target osquery_wrapper -j %NUMBER_OF_PROCESSORS%
+        sccache.exe --show-stats
 
-    - name: Verify DLL exports
+    - name: Verify DLL
       shell: powershell
       run: |
-        $dll = "osquery\osquery\osquery_wrapper.dll"
+        $dll = "${{ steps.build_paths.outputs.BINARY }}\osquery\osquery\osquery_wrapper.dll"
         if (Test-Path $dll) {
-          echo "✓ osquery_wrapper.dll built successfully"
-          (Get-Item $dll).Length / 1MB
+          $size = [math]::Round((Get-Item $dll).Length / 1MB, 1)
+          echo "✓ osquery_wrapper.dll built ($size MB)"
         } else {
-          echo "✗ DLL not found"
-          exit 1
+          echo "✗ DLL not found"; exit 1
         }
 
     - name: Upload artifact
@@ -151,9 +356,15 @@ jobs:
       with:
         name: osquery_wrapper-windows-x64
         path: |
-          osquery/osquery/osquery_wrapper.dll
-          osquery/osquery/osquery_wrapper.lib
-          osquery/osquery/osquery_wrapper.exp
+          ${{ steps.build_paths.outputs.BINARY }}\osquery\osquery\osquery_wrapper.dll
+          ${{ steps.build_paths.outputs.BINARY }}\osquery\osquery\osquery_wrapper.lib
+
+    - name: Save sccache
+      if: github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SCCACHE }}
+        key: sccache_windows_wrapper_${{ github.sha }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
