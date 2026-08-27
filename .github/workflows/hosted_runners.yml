@@ -255,6 +255,7 @@ jobs:
       run: |
         git config --global core.autocrlf false
         git config --global core.symlinks true
+        git config --global core.longpaths true
 
     - name: Setup build paths
       id: build_paths
@@ -307,7 +308,22 @@ jobs:
 
     - name: Update submodules
       working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: git submodule sync --recursive && git submodule update --init --recursive
+      shell: cmd
+      run: |
+        git submodule sync --recursive
+        git submodule update --init --recursive
+        if %errorlevel% neq 0 (
+          echo WARNING: Full recursive submodule init failed, trying selective init...
+          git submodule update --init libraries/cmake/source/boost/src
+          git submodule update --init libraries/cmake/source/libarchive/src
+          git submodule update --init libraries/cmake/source/openssl/src
+          git submodule update --init libraries/cmake/source/thrift/src
+          git submodule update --init libraries/cmake/source/sqlite/src
+          git submodule update --init libraries/cmake/source/zlib/src
+          git submodule update --init libraries/cmake/source/gflags/src
+          git submodule update --init libraries/cmake/source/glog/src
+          echo Selective submodule init completed
+        )
 
     - name: Install CMake
       working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
