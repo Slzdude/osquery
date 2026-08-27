@@ -98,6 +98,7 @@ jobs:
           -DOSQUERY_TOOLCHAIN_SYSROOT:PATH="/usr/local/osquery-toolchain" \
           -DCMAKE_BUILD_TYPE:STRING=Release \
           -DOSQUERY_BUILD_TESTS=OFF \
+          -DOSQUERY_BUILD_AWS=OFF \
           -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
@@ -206,6 +207,7 @@ jobs:
           -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}" \
           -DCMAKE_BUILD_TYPE:STRING=Release \
           -DOSQUERY_BUILD_TESTS=OFF \
+          -DOSQUERY_BUILD_AWS=OFF \
           -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
@@ -360,6 +362,7 @@ jobs:
           -DCMAKE_CXX_COMPILER=cl.exe ^
           -DCMAKE_BUILD_TYPE=Release ^
           -DOSQUERY_BUILD_TESTS=OFF ^
+          -DOSQUERY_BUILD_AWS=OFF ^
           -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" ^
           -DCMAKE_C_COMPILER_LAUNCHER="sccache.exe" ^
           -DCMAKE_CXX_COMPILER_LAUNCHER="sccache.exe" ^
