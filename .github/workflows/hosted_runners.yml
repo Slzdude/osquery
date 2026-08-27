@@ -308,16 +308,26 @@ jobs:
 
     - name: Update submodules
       working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      shell: cmd
+      shell: powershell
       run: |
         git submodule sync --recursive
-        REM Init only Windows-required submodules (libdevmapper has aux.sh reserved name)
-        REM cmake initializeGitSubmodule() will handle nested submodules as needed
-        for %%m in (boost bzip2 gflags glog googletest lz4 lzma rapidjson rocksdb sleuthkit sqlite thrift yara libarchive librdkafka linenoise-ng openssl) do (
-          echo Initializing %%m...
-          git submodule update --init "libraries/cmake/source/%%m/src"
-        )
-        echo Windows submodules initialized.
+        # Full recursive init - will fail on libdevmapper's aux.sh (Windows reserved name)
+        # but all submodules initialized BEFORE the failure point are fine
+        git submodule update --init --recursive 2>&1
+        Write-Host "Checking for uninitialized submodules..."
+        # Find any library submodules that are still empty and init them individually
+        $libs = Get-ChildItem -Path "libraries/cmake/source" -Directory
+        foreach ($lib in $libs) {
+          $src = Join-Path $lib.FullName "src"
+          if (Test-Path "$src/.gitmodules") {
+            $contents = Get-ChildItem -Path $src -Force -ErrorAction SilentlyContinue
+            if (-not $contents -or ($contents.Count -le 1)) {
+              Write-Host "Re-initializing: $($lib.Name)"
+              git submodule update --init --recursive $src 2>&1
+            }
+          }
+        }
+        Write-Host "Submodule initialization completed."
 
     - name: Install CMake
       working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
