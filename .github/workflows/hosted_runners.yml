@@ -311,19 +311,13 @@ jobs:
       shell: cmd
       run: |
         git submodule sync --recursive
-        git submodule update --init --recursive
-        if %errorlevel% neq 0 (
-          echo WARNING: Full recursive submodule init failed, trying selective init...
-          git submodule update --init libraries/cmake/source/boost/src
-          git submodule update --init libraries/cmake/source/libarchive/src
-          git submodule update --init libraries/cmake/source/openssl/src
-          git submodule update --init libraries/cmake/source/thrift/src
-          git submodule update --init libraries/cmake/source/sqlite/src
-          git submodule update --init libraries/cmake/source/zlib/src
-          git submodule update --init libraries/cmake/source/gflags/src
-          git submodule update --init libraries/cmake/source/glog/src
-          echo Selective submodule init completed
+        REM Init only Windows-required submodules (libdevmapper has aux.sh reserved name)
+        REM cmake initializeGitSubmodule() will handle nested submodules as needed
+        for %%m in (boost bzip2 gflags glog googletest lz4 lzma rapidjson rocksdb sleuthkit sqlite thrift yara libarchive librdkafka linenoise-ng openssl) do (
+          echo Initializing %%m...
+          git submodule update --init "libraries/cmake/source/%%m/src"
         )
+        echo Windows submodules initialized.
 
     - name: Install CMake
       working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
