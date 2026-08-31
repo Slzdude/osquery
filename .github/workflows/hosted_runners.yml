@@ -48,7 +48,7 @@ jobs:
         echo "CCACHE=$(realpath workspace/ccache)" >> $GITHUB_OUTPUT
 
     - name: Clone repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
@@ -63,7 +63,6 @@ jobs:
       run: |
         ver=$(git describe --tags --always 2>/dev/null || echo "0.0.0")
         echo "VALUE=$ver" >> $GITHUB_OUTPUT
-        echo "Detected version: $ver"
 
     - name: Compute submodule hash
       id: submodule_hash
@@ -73,12 +72,12 @@ jobs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
-        key: gitmodules_linux_${{ steps.submodule_hash.outputs.VALUE }}
-        restore-keys: gitmodules_linux
+        key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
+        restore-keys: gitmodules_${{ runner.os }}
 
     - name: Update submodules
       working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: git submodule sync --recursive && git submodule update --init --recursive
+      run: git submodule sync --recursive
 
     - name: Restore ccache
       uses: actions/cache/restore@v6
@@ -102,7 +101,7 @@ jobs:
           -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
-    - name: Build all osquery libraries
+    - name: Build
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       env:
         CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
@@ -114,20 +113,16 @@ jobs:
     - name: Create combined static library
       run: |
         cd ${{ steps.build_paths.outputs.BINARY }}
-        # Collect all osquery and third-party .a files
         find osquery/ libs/ specs/ -name "*.a" -type f | sort > /tmp/all_libs.txt
-        echo "Found $(wc -l < /tmp/all_libs.txt) libraries"
-        # Create combined archive
         echo "CREATE libosquery_wrapper_static.a" > /tmp/combine.mri
         cat /tmp/all_libs.txt | while read f; do echo "ADDLIB $f" >> /tmp/combine.mri; done
         echo "SAVE" >> /tmp/combine.mri
         echo "END" >> /tmp/combine.mri
         ar -M < /tmp/combine.mri
         ls -lh libosquery_wrapper_static.a
-        ar t libosquery_wrapper_static.a | wc -l
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: libosquery_wrapper-linux-x86_64
         path: ${{ steps.build_paths.outputs.BINARY }}/libosquery_wrapper_static.a
@@ -137,7 +132,7 @@ jobs:
       uses: actions/cache/save@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
-        key: gitmodules_linux_${{ steps.submodule_hash.outputs.VALUE }}
+        key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
 
     - name: Save ccache
       if: github.ref_name == github.event.repository.default_branch
@@ -162,7 +157,7 @@ jobs:
         echo "CCACHE=$(pwd)/workspace/ccache" >> $GITHUB_OUTPUT
 
     - name: Clone repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
@@ -177,7 +172,6 @@ jobs:
       run: |
         ver=$(git describe --tags --always 2>/dev/null || echo "0.0.0")
         echo "VALUE=$ver" >> $GITHUB_OUTPUT
-        echo "Detected version: $ver"
 
     - name: Install build dependencies
       run: brew install ccache flex bison coreutils gnu-sed
@@ -190,18 +184,21 @@ jobs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
-        key: gitmodules_macos_${{ steps.submodule_hash.outputs.VALUE }}
-        restore-keys: gitmodules_macos
+        key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
+        restore-keys: gitmodules_${{ runner.os }}
 
     - name: Update submodules
       working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: git submodule sync --recursive && git submodule update --init --recursive
+      run: git submodule sync --recursive
 
     - name: Restore ccache
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.build_paths.outputs.CCACHE }}
         key: ccache_macos_wrapper
+
+    - name: Configure ccache
+      run: echo "CCACHE_CONFIGPATH=${{ steps.build_paths.outputs.SOURCE }}/ccache.conf" >> $GITHUB_ENV
 
     - name: Configure
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
@@ -217,7 +214,7 @@ jobs:
           -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
-    - name: Build all osquery libraries
+    - name: Build
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       env:
         CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
@@ -230,17 +227,15 @@ jobs:
       run: |
         cd ${{ steps.build_paths.outputs.BINARY }}
         find osquery/ libs/ specs/ -name "*.a" -type f | sort > /tmp/all_libs.txt
-        echo "Found $(wc -l < /tmp/all_libs.txt) libraries"
         echo "CREATE libosquery_wrapper_static.a" > /tmp/combine.mri
         cat /tmp/all_libs.txt | while read f; do echo "ADDLIB $f" >> /tmp/combine.mri; done
         echo "SAVE" >> /tmp/combine.mri
         echo "END" >> /tmp/combine.mri
         ar -M < /tmp/combine.mri
         ls -lh libosquery_wrapper_static.a
-        ar t libosquery_wrapper_static.a | wc -l
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: libosquery_wrapper-macos-arm64
         path: ${{ steps.build_paths.outputs.BINARY }}/libosquery_wrapper_static.a
@@ -250,7 +245,7 @@ jobs:
       uses: actions/cache/save@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
-        key: gitmodules_macos_${{ steps.submodule_hash.outputs.VALUE }}
+        key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
 
     - name: Save ccache
       if: github.ref_name == github.event.repository.default_branch
@@ -282,7 +277,7 @@ jobs:
         echo "INSTALL=$base\w\install" >> $env:GITHUB_OUTPUT
 
     - name: Clone repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
@@ -299,7 +294,6 @@ jobs:
         $ver = (git describe --tags --always 2>$null)
         if (-not $ver) { $ver = "0.0.0" }
         echo "VALUE=$ver" >> $env:GITHUB_OUTPUT
-        echo "Detected version: $ver"
 
     - name: Compute submodule hash
       id: submodule_hash
@@ -315,8 +309,8 @@ jobs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}\.git\modules
-        key: gitmodules_windows_${{ steps.submodule_hash.outputs.VALUE }}
-        restore-keys: gitmodules_windows
+        key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
+        restore-keys: gitmodules_${{ runner.os }}
 
     - name: Update submodules
       working-directory: ${{ steps.build_paths.outputs.SOURCE }}
@@ -356,7 +350,7 @@ jobs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.build_paths.outputs.SCCACHE }}
-        key: sccache_windows_wrapper
+        key: sccache_${{ runner.os }}_wrapper
 
     - name: Configure
       shell: cmd
@@ -378,7 +372,7 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER="sccache.exe" ^
           "${{ steps.build_paths.outputs.SOURCE }}"
 
-    - name: Build all osquery libraries
+    - name: Build
       shell: cmd
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       env:
@@ -397,16 +391,12 @@ jobs:
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         @echo on
-        REM Collect all .lib files
         dir /s /b osquery\*.lib libs\*.lib specs\*.lib > lib_list.txt
-        echo Found libraries:
-        type lib_list.txt | find /c /v ""
-        REM Combine with lib.exe (available after vcvarsall)
         lib.exe /NOLOGO /OUT:osquery_wrapper_static.lib @lib_list.txt
         dir osquery_wrapper_static.lib
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: osquery_wrapper-windows-x64
         path: ${{ steps.build_paths.outputs.BINARY }}\osquery_wrapper_static.lib
@@ -416,14 +406,14 @@ jobs:
       uses: actions/cache/save@v6
       with:
         path: ${{ steps.build_paths.outputs.SCCACHE }}
-        key: sccache_windows_wrapper_${{ github.sha }}
+        key: sccache_${{ runner.os }}_wrapper_${{ github.sha }}
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
       uses: actions/cache/save@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}\.git\modules
-        key: gitmodules_windows_${{ steps.submodule_hash.outputs.VALUE }}
+        key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -434,7 +424,7 @@ jobs:
 
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         path: artifacts
 
