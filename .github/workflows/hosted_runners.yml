@@ -392,17 +392,18 @@ jobs:
         sccache.exe --show-stats
 
     - name: Create combined static library
-      shell: powershell
+      shell: cmd
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       run: |
-        $libs = Get-ChildItem -Path "osquery","libs","specs" -Filter "*.lib" -Recurse | Select-Object -ExpandProperty FullName
-        Write-Host "Found $($libs.Count) libraries"
-        $libs | ForEach-Object { $_ } | Out-File -FilePath "lib_list.txt" -Encoding utf8
-        # Use lib.exe to combine
-        $libExe = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe"
-        & $libExe /NOLOGO /OUT:osquery_wrapper_static.lib @$lib_list.txt
-        $lib = Get-Item "osquery_wrapper_static.lib"
-        Write-Host "Combined library: $($lib.Length / 1MB) MB"
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        @echo on
+        REM Collect all .lib files
+        dir /s /b osquery\*.lib libs\*.lib specs\*.lib > lib_list.txt
+        echo Found libraries:
+        type lib_list.txt | find /c /v ""
+        REM Combine with lib.exe (available after vcvarsall)
+        lib.exe /NOLOGO /OUT:osquery_wrapper_static.lib @lib_list.txt
+        dir osquery_wrapper_static.lib
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
