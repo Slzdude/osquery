@@ -227,11 +227,9 @@ jobs:
       run: |
         cd ${{ steps.build_paths.outputs.BINARY }}
         find osquery/ libs/ specs/ -name "*.a" -type f | sort > /tmp/all_libs.txt
-        echo "CREATE libosquery_wrapper_static.a" > /tmp/combine.mri
-        cat /tmp/all_libs.txt | while read f; do echo "ADDLIB $f" >> /tmp/combine.mri; done
-        echo "SAVE" >> /tmp/combine.mri
-        echo "END" >> /tmp/combine.mri
-        ar -M < /tmp/combine.mri
+        echo "Found $(wc -l < /tmp/all_libs.txt) libraries"
+        # macOS uses libtool to combine static libraries
+        libtool -static -o libosquery_wrapper_static.a $(cat /tmp/all_libs.txt | tr '\n' ' ')
         ls -lh libosquery_wrapper_static.a
 
     - name: Upload artifact
