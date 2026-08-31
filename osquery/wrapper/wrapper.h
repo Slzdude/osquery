@@ -14,9 +14,13 @@ extern "C" {
  * 编译为静态库，由 Agent 通过 CGO 直接链接
  */
 
+// 回调函数类型
+typedef void (*osquery_log_callback_t)(int severity, const char* file, int line, const char* message);
+typedef void (*osquery_event_callback_t)(const char* event_type, const char* json_data);
+
 int osquery_init(const char* flags_json);
-void osquery_set_log_callback(void (*callback)(int, const char*, int, const char*));
-void osquery_set_event_callback(void (*callback)(const char*, const char*));
+void osquery_set_log_callback(osquery_log_callback_t callback);
+void osquery_set_event_callback(osquery_event_callback_t callback);
 char* osquery_query(const char* sql);
 void osquery_free_result(char* result);
 const char* osquery_version(void);

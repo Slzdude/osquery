@@ -1,0 +1,2 @@
+/usr/bin/ar qc libosquery_wrapper.a CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o
+/usr/bin/ranlib libosquery_wrapper.a
