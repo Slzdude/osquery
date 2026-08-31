@@ -122,7 +122,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: libosquery_wrapper-linux-x86_64
-        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/osquery/libosquery_wrapper.a
+        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/wrapper/libosquery_wrapper.a
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
@@ -229,7 +229,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: libosquery_wrapper-macos-arm64
-        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/osquery/libosquery_wrapper.a
+        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/wrapper/libosquery_wrapper.a
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
@@ -395,7 +395,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: osquery_wrapper-windows-x64
-        path: ${{ steps.build_paths.outputs.BINARY }}\osquery\osquery\osquery_wrapper.lib
+        path: ${{ steps.build_paths.outputs.BINARY }}\osquery\wrapper\osquery_wrapper.lib
 
     - name: Save sccache
       if: github.ref_name == github.event.repository.default_branch
