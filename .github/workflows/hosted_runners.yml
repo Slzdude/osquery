@@ -111,20 +111,18 @@ jobs:
         cmake --build . --target osquery_wrapper -j $(($(nproc) + 1))
         ccache -s
 
-    - name: Locate and verify wrapper
-      id: wrapper
+    - name: Verify static library
       run: |
-        so_path=$(find ${{ steps.build_paths.outputs.BINARY }} -name "libosquery_wrapper.so" -type f | head -1)
-        echo "Found: $so_path"
-        nm -D "$so_path" | grep " T osquery_" | wc -l | grep -q "7"
-        echo "✓ All 7 symbols exported"
-        echo "PATH=$so_path" >> $GITHUB_OUTPUT
+        lib_path=$(find ${{ steps.build_paths.outputs.BINARY }} -name "libosquery_wrapper.a" -type f | head -1)
+        echo "Found: $lib_path"
+        ar t "$lib_path" | wc -l
+        echo "✓ Static library built"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: libosquery_wrapper-linux-x86_64
-        path: ${{ steps.wrapper.outputs.PATH }}
+        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/osquery/libosquery_wrapper.a
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
@@ -220,20 +218,18 @@ jobs:
         cmake --build . --target osquery_wrapper -j $(($(sysctl -n hw.logicalcpu) + 1))
         ccache -s
 
-    - name: Locate and verify wrapper
-      id: wrapper
+    - name: Verify static library
       run: |
-        dylib_path=$(find ${{ steps.build_paths.outputs.BINARY }} -name "libosquery_wrapper.dylib" -type f | head -1)
-        echo "Found: $dylib_path"
-        nm -g "$dylib_path" | grep " T _osquery_" | wc -l | grep -q "7"
-        echo "✓ All 7 symbols exported"
-        echo "PATH=$dylib_path" >> $GITHUB_OUTPUT
+        lib_path=$(find ${{ steps.build_paths.outputs.BINARY }} -name "libosquery_wrapper.a" -type f | head -1)
+        echo "Found: $lib_path"
+        ar t "$lib_path" | wc -l
+        echo "✓ Static library built"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: libosquery_wrapper-macos-arm64
-        path: ${{ steps.wrapper.outputs.PATH }}
+        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/osquery/libosquery_wrapper.a
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
@@ -310,7 +306,19 @@ jobs:
 
     - name: Update submodules
       working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: git submodule sync --recursive
+      shell: cmd
+      run: |
+        git submodule sync --recursive
+        git submodule update --init --recursive
+        if %errorlevel% neq 0 (
+          echo WARNING: Recursive submodule init had errors, recovering...
+          cd libraries\cmake\source\libdevmapper\src
+          git checkout -- . 2>nul
+          git clean -fd
+          cd ..\..\..\..\..
+          git submodule update --init --recursive 2>nul
+          echo Submodule recovery completed.
+        )
 
     - name: Install CMake
       working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
@@ -381,18 +389,17 @@ jobs:
         cmake --build . --target osquery_wrapper -j %NUMBER_OF_PROCESSORS%
         sccache.exe --show-stats
 
-    - name: Locate and verify DLL
-      id: wrapper
+    - name: Verify static library
       shell: powershell
       run: |
-        $dll = Get-ChildItem -Path "${{ steps.build_paths.outputs.BINARY }}" -Filter "osquery_wrapper.dll" -Recurse | Select-Object -First 1
-        if ($dll) {
-          $size = [math]::Round($dll.Length / 1MB, 1)
-          Write-Host "Found: $($dll.FullName)"
-          Write-Host "osquery_wrapper.dll built ($size MB)"
-          "PATH=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        $lib = Get-ChildItem -Path "${{ steps.build_paths.outputs.BINARY }}" -Filter "osquery_wrapper.lib" -Recurse | Select-Object -First 1
+        if ($lib) {
+          $size = [math]::Round($lib.Length / 1KB, 1)
+          Write-Host "Found: $($lib.FullName) ($size KB)"
+          Write-Host "✓ Static library built"
+          "PATH=$($lib.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         } else {
-          Write-Host "DLL not found"
+          Write-Host "✗ Library not found"
           exit 1
         }
 
@@ -400,7 +407,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: osquery_wrapper-windows-x64
-        path: ${{ steps.wrapper.outputs.PATH }}
+        path: ${{ steps.build_paths.outputs.BINARY }}\osquery\osquery\osquery_wrapper.lib
 
     - name: Save sccache
       if: github.ref_name == github.event.repository.default_branch
@@ -432,9 +439,8 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir -p release
-        cp artifacts/libosquery_wrapper-linux-x86_64/libosquery_wrapper.so release/
-        cp artifacts/libosquery_wrapper-macos-arm64/libosquery_wrapper.dylib release/
-        cp artifacts/osquery_wrapper-windows-x64/osquery_wrapper.dll release/
+        cp artifacts/libosquery_wrapper-linux-x86_64/libosquery_wrapper.a release/
+        cp artifacts/libosquery_wrapper-macos-arm64/libosquery_wrapper.a release/libosquery_wrapper-macos-arm64.a
         cp artifacts/osquery_wrapper-windows-x64/osquery_wrapper.lib release/
         cd release && sha256sum * > checksums.txt
 

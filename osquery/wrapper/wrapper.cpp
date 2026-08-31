@@ -103,7 +103,7 @@ static char* toJson(const osquery::QueryData& rows) {
 
 extern "C" {
 
-WRAPPER_API int osquery_init(const char* flags_json) {
+int osquery_init(const char* flags_json) {
   if (g_init != nullptr) return -1;
 
   try {
@@ -129,15 +129,15 @@ WRAPPER_API int osquery_init(const char* flags_json) {
   }
 }
 
-WRAPPER_API void osquery_set_log_callback(osquery_log_callback_t cb) {
+void osquery_set_log_callback(osquery_log_callback_t cb) {
   g_log_callback = cb;
 }
 
-WRAPPER_API void osquery_set_event_callback(osquery_event_callback_t cb) {
+void osquery_set_event_callback(osquery_event_callback_t cb) {
   g_event_callback = cb;
 }
 
-WRAPPER_API char* osquery_query(const char* sql) {
+char* osquery_query(const char* sql) {
   if (g_init == nullptr || sql == nullptr) return nullptr;
 
   std::lock_guard<std::mutex> lock(g_query_mutex);
@@ -156,15 +156,15 @@ WRAPPER_API char* osquery_query(const char* sql) {
   }
 }
 
-WRAPPER_API void osquery_free_result(char* result) {
+void osquery_free_result(char* result) {
   if (result) delete[] result;
 }
 
-WRAPPER_API const char* osquery_version() {
+const char* osquery_version() {
   return "5.12.0";
 }
 
-WRAPPER_API void osquery_shutdown() {
+void osquery_shutdown() {
   try {
     if (g_init) {
       // Go 的 goroutine 可能在不同 OS 线程执行，导致线程 ID 不匹配
