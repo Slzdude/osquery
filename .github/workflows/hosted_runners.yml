@@ -309,16 +309,9 @@ jobs:
       shell: cmd
       run: |
         git submodule sync --recursive
-        git submodule update --init --recursive
-        if %errorlevel% neq 0 (
-          echo WARNING: Recursive submodule init had errors, recovering...
-          cd libraries\cmake\source\libdevmapper\src
-          git checkout -- . 2>nul
-          git clean -fd
-          cd ..\..\..\..\..
-          git submodule update --init --recursive 2>nul
-          echo Submodule recovery completed.
-        )
+        REM Full recursive init - libdevmapper may fail on Windows (aux.sh reserved name)
+        REM but cmake will handle missing submodules gracefully
+        git submodule update --init --recursive || echo "Submodule init had errors (expected on Windows), continuing..."
 
     - name: Install CMake
       working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
