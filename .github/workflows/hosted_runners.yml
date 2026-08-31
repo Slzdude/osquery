@@ -384,10 +384,10 @@ jobs:
         if ($lib) {
           $size = [math]::Round($lib.Length / 1KB, 1)
           Write-Host "Found: $($lib.FullName) ($size KB)"
-          Write-Host "✓ Static library built"
+          Write-Host "Static library built"
           "PATH=$($lib.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         } else {
-          Write-Host "✗ Library not found"
+          Write-Host "Library not found"
           exit 1
         }
 
