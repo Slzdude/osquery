@@ -102,27 +102,35 @@ jobs:
           -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
-    - name: Build wrapper
+    - name: Build all osquery libraries
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       env:
         CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
       run: |
         ccache --zero-stats
-        cmake --build . --target osquery_wrapper -j $(($(nproc) + 1))
+        cmake --build . -j $(($(nproc) + 1))
         ccache -s
 
-    - name: Verify static library
+    - name: Create combined static library
       run: |
-        lib_path=$(find ${{ steps.build_paths.outputs.BINARY }} -name "libosquery_wrapper.a" -type f | head -1)
-        echo "Found: $lib_path"
-        ar t "$lib_path" | wc -l
-        echo "✓ Static library built"
+        cd ${{ steps.build_paths.outputs.BINARY }}
+        # Collect all osquery and third-party .a files
+        find osquery/ libs/ specs/ -name "*.a" -type f | sort > /tmp/all_libs.txt
+        echo "Found $(wc -l < /tmp/all_libs.txt) libraries"
+        # Create combined archive
+        echo "CREATE libosquery_wrapper_static.a" > /tmp/combine.mri
+        cat /tmp/all_libs.txt | while read f; do echo "ADDLIB $f" >> /tmp/combine.mri; done
+        echo "SAVE" >> /tmp/combine.mri
+        echo "END" >> /tmp/combine.mri
+        ar -M < /tmp/combine.mri
+        ls -lh libosquery_wrapper_static.a
+        ar t libosquery_wrapper_static.a | wc -l
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: libosquery_wrapper-linux-x86_64
-        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/wrapper/libosquery_wrapper.a
+        path: ${{ steps.build_paths.outputs.BINARY }}/libosquery_wrapper_static.a
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
@@ -209,27 +217,33 @@ jobs:
           -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
-    - name: Build wrapper
+    - name: Build all osquery libraries
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       env:
         CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
       run: |
         ccache --zero-stats
-        cmake --build . --target osquery_wrapper -j $(($(sysctl -n hw.logicalcpu) + 1))
+        cmake --build . -j $(($(sysctl -n hw.logicalcpu) + 1))
         ccache -s
 
-    - name: Verify static library
+    - name: Create combined static library
       run: |
-        lib_path=$(find ${{ steps.build_paths.outputs.BINARY }} -name "libosquery_wrapper.a" -type f | head -1)
-        echo "Found: $lib_path"
-        ar t "$lib_path" | wc -l
-        echo "✓ Static library built"
+        cd ${{ steps.build_paths.outputs.BINARY }}
+        find osquery/ libs/ specs/ -name "*.a" -type f | sort > /tmp/all_libs.txt
+        echo "Found $(wc -l < /tmp/all_libs.txt) libraries"
+        echo "CREATE libosquery_wrapper_static.a" > /tmp/combine.mri
+        cat /tmp/all_libs.txt | while read f; do echo "ADDLIB $f" >> /tmp/combine.mri; done
+        echo "SAVE" >> /tmp/combine.mri
+        echo "END" >> /tmp/combine.mri
+        ar -M < /tmp/combine.mri
+        ls -lh libosquery_wrapper_static.a
+        ar t libosquery_wrapper_static.a | wc -l
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: libosquery_wrapper-macos-arm64
-        path: ${{ steps.build_paths.outputs.BINARY }}/osquery/wrapper/libosquery_wrapper.a
+        path: ${{ steps.build_paths.outputs.BINARY }}/libosquery_wrapper_static.a
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
@@ -364,7 +378,7 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER="sccache.exe" ^
           "${{ steps.build_paths.outputs.SOURCE }}"
 
-    - name: Build wrapper
+    - name: Build all osquery libraries
       shell: cmd
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       env:
@@ -374,28 +388,27 @@ jobs:
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         @echo on
         sccache.exe --zero-stats
-        cmake --build . --target osquery_wrapper -j %NUMBER_OF_PROCESSORS%
+        cmake --build . -j %NUMBER_OF_PROCESSORS%
         sccache.exe --show-stats
 
-    - name: Verify static library
+    - name: Create combined static library
       shell: powershell
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
       run: |
-        $lib = Get-ChildItem -Path "${{ steps.build_paths.outputs.BINARY }}" -Filter "osquery_wrapper.lib" -Recurse | Select-Object -First 1
-        if ($lib) {
-          $size = [math]::Round($lib.Length / 1KB, 1)
-          Write-Host "Found: $($lib.FullName) ($size KB)"
-          Write-Host "Static library built"
-          "PATH=$($lib.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-        } else {
-          Write-Host "Library not found"
-          exit 1
-        }
+        $libs = Get-ChildItem -Path "osquery","libs","specs" -Filter "*.lib" -Recurse | Select-Object -ExpandProperty FullName
+        Write-Host "Found $($libs.Count) libraries"
+        $libs | ForEach-Object { $_ } | Out-File -FilePath "lib_list.txt" -Encoding utf8
+        # Use lib.exe to combine
+        $libExe = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe"
+        & $libExe /NOLOGO /OUT:osquery_wrapper_static.lib @$lib_list.txt
+        $lib = Get-Item "osquery_wrapper_static.lib"
+        Write-Host "Combined library: $($lib.Length / 1MB) MB"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: osquery_wrapper-windows-x64
-        path: ${{ steps.build_paths.outputs.BINARY }}\osquery\wrapper\osquery_wrapper.lib
+        path: ${{ steps.build_paths.outputs.BINARY }}\osquery_wrapper_static.lib
 
     - name: Save sccache
       if: github.ref_name == github.event.repository.default_branch
@@ -427,9 +440,9 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir -p release
-        cp artifacts/libosquery_wrapper-linux-x86_64/libosquery_wrapper.a release/
-        cp artifacts/libosquery_wrapper-macos-arm64/libosquery_wrapper.a release/libosquery_wrapper-macos-arm64.a
-        cp artifacts/osquery_wrapper-windows-x64/osquery_wrapper.lib release/
+        cp artifacts/libosquery_wrapper-linux-x86_64/libosquery_wrapper_static.a release/
+        cp artifacts/libosquery_wrapper-macos-arm64/libosquery_wrapper_static.a release/libosquery_wrapper_static-macos-arm64.a
+        cp artifacts/osquery_wrapper-windows-x64/osquery_wrapper_static.lib release/
         cd release && sha256sum * > checksums.txt
 
     - name: Create GitHub Release
