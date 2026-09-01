@@ -110,22 +110,37 @@ jobs:
         cmake --build . -j $(($(nproc) + 1))
         ccache -s
 
-    - name: Create combined static library
+    - name: Install SDK
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      run: cmake --install . --prefix /tmp/osquery-sdk 2>/dev/null || true
+
+    - name: Compile glibc compat stub
+      run: gcc -c -o /tmp/glibc_compat.o ${{ steps.build_paths.outputs.SOURCE }}/osquery/wrapper/glibc_compat.c
+
+    - name: Package SDK
       run: |
-        cd ${{ steps.build_paths.outputs.BINARY }}
-        find osquery/ libs/ specs/ plugins/ installed_formulas/ openssl/ -name "*.a" -type f 2>/dev/null | sort > /tmp/all_libs.txt
-        echo "CREATE libosquery_wrapper_static.a" > /tmp/combine.mri
-        cat /tmp/all_libs.txt | while read f; do echo "ADDLIB $f" >> /tmp/combine.mri; done
-        echo "SAVE" >> /tmp/combine.mri
-        echo "END" >> /tmp/combine.mri
-        ar -M < /tmp/combine.mri
-        ls -lh libosquery_wrapper_static.a
+        # Copy wrapper .a
+        cp ${{ steps.build_paths.outputs.BINARY }}/osquery/wrapper/libosquery_wrapper.a /tmp/osquery-sdk/lib/
+        # Copy specs tables to deps/
+        mkdir -p /tmp/osquery-sdk/lib/deps
+        cp ${{ steps.build_paths.outputs.BINARY }}/specs/libcodegen_native_tables.a /tmp/osquery-sdk/lib/deps/
+        cp ${{ steps.build_paths.outputs.BINARY }}/specs/libcodegen_foreign_tables.a /tmp/osquery-sdk/lib/deps/
+        # Copy glibc compat stub
+        cp /tmp/glibc_compat.o /tmp/osquery-sdk/lib/
+        # Copy all dependency .a files
+        find ${{ steps.build_paths.outputs.BINARY }}/osquery/ -name "*.a" -type f -exec cp {} /tmp/osquery-sdk/lib/ \; 2>/dev/null
+        find ${{ steps.build_paths.outputs.BINARY }}/plugins/ -name "*.a" -type f -exec cp {} /tmp/osquery-sdk/lib/ \; 2>/dev/null
+        # Strip
+        find /tmp/osquery-sdk/lib -name "*.a" -exec strip --strip-debug {} \; 2>/dev/null
+        # Create tarball
+        cd /tmp && tar czf osquery-sdk-linux-x86_64.tar.gz osquery-sdk/
+        ls -lh /tmp/osquery-sdk-linux-x86_64.tar.gz
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: libosquery_wrapper-linux-x86_64
-        path: ${{ steps.build_paths.outputs.BINARY }}/libosquery_wrapper_static.a
+        name: osquery-sdk-linux-x86_64
+        path: /tmp/osquery-sdk-linux-x86_64.tar.gz
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
@@ -223,20 +238,27 @@ jobs:
         cmake --build . -j $(($(sysctl -n hw.logicalcpu) + 1))
         ccache -s
 
-    - name: Create combined static library
+    - name: Install SDK
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      run: cmake --install . --prefix /tmp/osquery-sdk 2>/dev/null || true
+
+    - name: Package SDK
       run: |
-        cd ${{ steps.build_paths.outputs.BINARY }}
-        find osquery/ libs/ specs/ plugins/ installed_formulas/ openssl/ -name "*.a" -type f 2>/dev/null | sort > /tmp/all_libs.txt
-        echo "Found $(wc -l < /tmp/all_libs.txt) libraries"
-        # macOS uses libtool to combine static libraries
-        libtool -static -o libosquery_wrapper_static.a $(cat /tmp/all_libs.txt | tr '\n' ' ')
-        ls -lh libosquery_wrapper_static.a
+        cp ${{ steps.build_paths.outputs.BINARY }}/osquery/wrapper/libosquery_wrapper.a /tmp/osquery-sdk/lib/
+        mkdir -p /tmp/osquery-sdk/lib/deps
+        cp ${{ steps.build_paths.outputs.BINARY }}/specs/libcodegen_native_tables.a /tmp/osquery-sdk/lib/deps/
+        cp ${{ steps.build_paths.outputs.BINARY }}/specs/libcodegen_foreign_tables.a /tmp/osquery-sdk/lib/deps/
+        find ${{ steps.build_paths.outputs.BINARY }}/osquery/ -name "*.a" -type f -exec cp {} /tmp/osquery-sdk/lib/ \; 2>/dev/null
+        find ${{ steps.build_paths.outputs.BINARY }}/plugins/ -name "*.a" -type f -exec cp {} /tmp/osquery-sdk/lib/ \; 2>/dev/null
+        find /tmp/osquery-sdk/lib -name "*.a" -exec strip -x {} \; 2>/dev/null
+        cd /tmp && tar czf osquery-sdk-macos-arm64.tar.gz osquery-sdk/
+        ls -lh /tmp/osquery-sdk-macos-arm64.tar.gz
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: libosquery_wrapper-macos-arm64
-        path: ${{ steps.build_paths.outputs.BINARY }}/libosquery_wrapper_static.a
+        name: osquery-sdk-macos-arm64
+        path: /tmp/osquery-sdk-macos-arm64.tar.gz
 
     - name: Save submodule cache
       if: github.ref_name == github.event.repository.default_branch
@@ -383,21 +405,34 @@ jobs:
         cmake --build . -j %NUMBER_OF_PROCESSORS%
         sccache.exe --show-stats
 
-    - name: Create combined static library
-      shell: cmd
+    - name: Install SDK
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      shell: cmd
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         @echo on
-        dir /s /b osquery\*.lib libs\*.lib specs\*.lib > lib_list.txt
-        lib.exe /NOLOGO /OUT:osquery_wrapper_static.lib @lib_list.txt
-        dir osquery_wrapper_static.lib
+        cmake --install . --prefix w\osquery-sdk 2>nul
+        exit /b 0
+
+    - name: Package SDK
+      shell: powershell
+      run: |
+        $sdkDir = "${{ steps.build_paths.outputs.BINARY }}\w\osquery-sdk"
+        $buildDir = "${{ steps.build_paths.outputs.BINARY }}"
+        New-Item -ItemType Directory -Force -Path "$sdkDir\lib\deps"
+        Copy-Item "$buildDir\osquery\wrapper\osquery_wrapper.lib" "$sdkDir\lib\"
+        Copy-Item "$buildDir\specs\libcodegen_native_tables.lib" "$sdkDir\lib\deps\"
+        Copy-Item "$buildDir\specs\libcodegen_foreign_tables.lib" "$sdkDir\lib\deps\"
+        Get-ChildItem -Path "$buildDir\osquery" -Filter "*.lib" -Recurse | Copy-Item -Destination "$sdkDir\lib\"
+        Get-ChildItem -Path "$buildDir\plugins" -Filter "*.lib" -Recurse | Copy-Item -Destination "$sdkDir\lib\"
+        Compress-Archive -Path "$sdkDir" -DestinationPath "$buildDir\osquery-sdk-windows-x64.zip" -Force
+        Get-Item "$buildDir\osquery-sdk-windows-x64.zip"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: osquery_wrapper-windows-x64
-        path: ${{ steps.build_paths.outputs.BINARY }}\osquery_wrapper_static.lib
+        name: osquery-sdk-windows-x64
+        path: ${{ steps.build_paths.outputs.BINARY }}\osquery-sdk-windows-x64.zip
 
     - name: Save sccache
       if: github.ref_name == github.event.repository.default_branch
@@ -429,9 +464,9 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir -p release
-        cp artifacts/libosquery_wrapper-linux-x86_64/libosquery_wrapper_static.a release/
-        cp artifacts/libosquery_wrapper-macos-arm64/libosquery_wrapper_static.a release/libosquery_wrapper_static-macos-arm64.a
-        cp artifacts/osquery_wrapper-windows-x64/osquery_wrapper_static.lib release/
+        cp artifacts/osquery-sdk-linux-x86_64/*.tar.gz release/
+        cp artifacts/osquery-sdk-macos-arm64/*.tar.gz release/
+        cp artifacts/osquery-sdk-windows-x64/*.zip release/
         cd release && sha256sum * > checksums.txt
 
     - name: Create GitHub Release
