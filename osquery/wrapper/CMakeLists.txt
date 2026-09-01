@@ -208,22 +208,7 @@ install(CODE "
   endforeach()
 ")
 
-# 补充第三方库（cmake install 可能遗漏的）
-install(CODE "
-  file(GLOB_RECURSE _extra_libs \"${CMAKE_BINARY_DIR}/libs/src/*.a\")
-  file(GLOB _openssl_libs \"${CMAKE_BINARY_DIR}/openssl/openssl-prefix/src/openssl/lib*.a\")
-  file(GLOB _formula_libs \"${CMAKE_BINARY_DIR}/installed_formulas/*/lib64/*.a\" \"${CMAKE_BINARY_DIR}/installed_formulas/*/lib/*.a\")
-
-  foreach(lib \${_extra_libs} \${_openssl_libs} \${_formula_libs})
-    if(EXISTS \"\${lib}\")
-      get_filename_component(_name \"\${lib}\" NAME)
-      set(_dest \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/\${_name}\")
-      if(NOT EXISTS \"\${_dest}\")
-        file(INSTALL \"\${lib}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
-      endif()
-    endif()
-  endforeach()
-")
+# 注：补充第三方库由 CI 的 find 命令完成，不再在 cmake install 中递归扫描
 
 # ── pkg-config ──────────────────────────────────────────────
 # 仅 Linux 使用 pkg-config（macOS 用 -framework，Windows 用 cmake）
