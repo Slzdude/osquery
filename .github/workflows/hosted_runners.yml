@@ -1,526 +1,1317 @@
-name: build-wrapper
+#
+# Copyright (c) 2014-present, The osquery authors
+#
+# This source code is licensed as defined by the LICENSE file found in the
+# root directory of this source tree.
+#
+# SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only)
+#
+
+# Due to a limitation in how GitHub Actions works, we can't reference
+# jobs in another file inside the `needs` statement.
+#
+# This configuration file takes care of the Windows, macOS and Linux
+# builds on x86_64 and aarch64
+name: build
 
 on:
-  push:
-    branches: [master]
-    tags: ['v*']
-  pull_request:
-    branches: [master]
+  # Run this workflow once every day against the master branch
+  schedule:
+   - cron: "0 7 * * *"
 
+  push:
+    branches:
+      - 'master'
+      - 'main'
+
+    tags:
+      - '*'
+
+  pull_request:
+    branches:
+      - '*'
+
+# Cancel old jobs of a PR if a new job is started.
+# Fallback on using the run id if it's not a PR, which is unique, so no job canceling.
 concurrency:
-  group: wrapper-${{ github.event.pull_request.number || github.run_id }}
+  group: hosted-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Please remember to update values for both x86 and aarch64 workflows.
 env:
+  PACKAGING_REPO: https://github.com/osquery/osquery-packaging
+  PACKAGING_COMMIT: 528b57ae758f41f0aaafde25bf2d3844785dd848
   OSQUERY_TOOLCHAIN_VERSION: 1.2.0
 
+# If the initial code sanity checks are passing, then one job
+# per [`platform` * `build_type`] will start, building osquery
+# and generating packages that are later attached to the commit
+# (or PR) as build artifacts.
 jobs:
-  build_linux:
+  # This job performs basic source code check, looking for formatting
+  # issues and missing copyright headers
+  check_code_style:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Free disk space
-      run: |
-        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-        sudo apt-get purge -y 'clang-*' 'llvm-*' 'php*' 'mono-*' 'dotnet-*' \
-          google-chrome-stable microsoft-edge-stable firefox snapd temurin-*-jdk || true
-        sudo apt-get autoremove -y && sudo apt-get clean
-        df -h
-
     - name: Install osquery-toolchain
       run: |
-        wget -q https://github.com/osquery/osquery-toolchain/releases/download/${{ env.OSQUERY_TOOLCHAIN_VERSION }}/osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz
-        sudo tar xf osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz -C /usr/local
+        wget https://github.com/osquery/osquery-toolchain/releases/download/${{ env.OSQUERY_TOOLCHAIN_VERSION }}/osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz 
+        sudo tar xvf osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz -C /usr/local
+
+    - name: Setup the build paths
+      shell: bash
+      id: build_paths
+      run: |
+        rel_build_path="workspace/build"
+        rel_source_path="workspace/src"
+
+        mkdir -p "${rel_build_path}"
+        mkdir -p "${rel_source_path}"
+
+        echo "SOURCE=$(realpath ${rel_source_path})" >> $GITHUB_OUTPUT
+        echo "BINARY=$(realpath ${rel_build_path})" >> $GITHUB_OUTPUT
+
+    - name: Clone the osquery repository
+      uses: actions/checkout@v7
+      with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}
+        fetch-depth: 0
+
+    # This script makes sure that the copyright headers have been correctly
+    # placed on all the source code files
+    - name: Check the copyright headers
+      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
+      run: ./tools/ci/scripts/check_copyright_headers.py
+
+    - name: Configure the project
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      run: |
+        cmake -G "Unix Makefiles" \
+          -DOSQUERY_TOOLCHAIN_SYSROOT:PATH="/usr/local/osquery-toolchain" \
+          -DOSQUERY_ENABLE_FORMAT_ONLY=ON \
+          "${{ steps.build_paths.outputs.SOURCE }}"
+
+    # Formatting is tested against the clang-format binary we ship
+    # with the osquery-toolchain, so this job is only performed once on
+    # a Linux machine.
+    - name: Check code formatting
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      run: cmake --build . --target format_check
+
+
+  # This jobs checks that the third party libraries manifest has the correct format
+  # and that is up to date compared to the current state of the repository
+  check_libraries_manifest:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Clone the osquery repository
+      uses: actions/checkout@v7
+
+    - name: Install python pre-requisites
+      run: pip3 install -r ./tools/ci/scripts/cve/requirements.txt
+
+    - name: Verify the third party libraries manifest
+      run: |
+        ./tools/ci/scripts/cve/validate_manifest_libraries_versions.py --manifest libraries/third_party_libraries_manifest.json \
+        --repository .
+
+
+  # Test generating the website json
+  check_genwebsitejson:
+    needs: [check_code_style, check_libraries_manifest]
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Clone the osquery repository
+      uses: actions/checkout@v7
+
+    - name: genwebsitejson.py
+      run: python3 tools/codegen/genwebsitejson.py --specs=specs/
+
+
+  # This job runs source code analysis tools (currently, just cppcheck)
+  check_source_code:
+    needs: [check_code_style, check_libraries_manifest]
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-22.04]
+
+    steps:
+    - name: Install osquery-toolchain
+      run: |
+        wget https://github.com/osquery/osquery-toolchain/releases/download/${{ env.OSQUERY_TOOLCHAIN_VERSION }}/osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz 
+        sudo tar xvf osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz -C /usr/local
 
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install --no-install-recommends -y \
-          elfutils python3-psutil python3-six python3-wheel \
-          linux-headers-generic ccache
+        sudo apt-get install --no-install-recommends -y cppcheck
 
-    - name: Setup build paths
+    - name: Setup the build paths
+      shell: bash
       id: build_paths
       run: |
-        mkdir -p workspace/build workspace/src workspace/ccache
-        echo "SOURCE=$(realpath workspace/src)" >> $GITHUB_OUTPUT
-        echo "BINARY=$(realpath workspace/build)" >> $GITHUB_OUTPUT
-        echo "CCACHE=$(realpath workspace/ccache)" >> $GITHUB_OUTPUT
+        rel_build_path="workspace/build"
+        rel_source_path="workspace/src"
+        rel_install_path="workspace/install"
 
-    - name: Clone repository
+        mkdir -p ${rel_build_path} \
+                 ${rel_source_path} \
+                 ${rel_install_path}
+
+        echo "SOURCE=$(realpath ${rel_source_path})" >> $GITHUB_OUTPUT
+        echo "BINARY=$(realpath ${rel_build_path})" >> $GITHUB_OUTPUT
+        echo "REL_BINARY=${rel_build_path}" >> $GITHUB_OUTPUT
+
+    - name: Clone the osquery repository
       uses: actions/checkout@v7
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
 
-    - name: Fetch all tags
-      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: git fetch --tags --force
-
-    - name: Detect version
-      id: version
-      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: |
-        ver=$(git describe --tags --always 2>/dev/null || echo "0.0.0")
-        echo "VALUE=$ver" >> $GITHUB_OUTPUT
-
-    - name: Compute submodule hash
+    - name: Compute the submodule hash
       id: submodule_hash
+      shell: bash
       run: echo "VALUE=$(git -C ${{ steps.build_paths.outputs.SOURCE }} submodule status --recursive | sha256sum | awk '{print $1}')" >> $GITHUB_OUTPUT
 
-    - name: Restore submodule cache
+    - name: Restore cache (git submodules)
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
         key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
         restore-keys: gitmodules_${{ runner.os }}
 
-    - name: Update submodules
+    - name: Update the git submodules
       working-directory: ${{ steps.build_paths.outputs.SOURCE }}
       run: git submodule sync --recursive
 
-    - name: Restore ccache
-      uses: actions/cache/restore@v6
-      with:
-        path: ${{ steps.build_paths.outputs.CCACHE }}
-        key: ccache_linux_wrapper
-
-    - name: Configure ccache
-      run: echo "CCACHE_CONFIGPATH=${{ steps.build_paths.outputs.SOURCE }}/ccache.conf" >> $GITHUB_ENV
-
-    - name: Configure
+    - name: Configure the project (Release)
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
-      env:
-        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
       run: |
         cmake -G "Unix Makefiles" \
           -DOSQUERY_TOOLCHAIN_SYSROOT:PATH="/usr/local/osquery-toolchain" \
           -DCMAKE_BUILD_TYPE:STRING=Release \
-          -DOSQUERY_BUILD_TESTS=OFF \
-          -DOSQUERY_BUILD_AWS=OFF \
-          -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
+          -DOSQUERY_BUILD_TESTS=ON \
+          -DOSQUERY_BUILD_ROOT_TESTS=ON \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
-    - name: Build
+    - name: Initialize the project (Release)
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
-      env:
-        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
-      run: |
-        ccache --zero-stats
-        cmake --build . -j $(($(nproc) + 1))
-        ccache -s
+      run: cmake --build . --target prepare_for_ide
 
-    - name: Install SDK
+    - name: Run cppcheck (Release)
+      shell: bash
+      id: release_cppcheck_runner
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
-      run: cmake --install . --prefix /tmp/osquery-sdk 2>/dev/null || true
-
-    - name: Compile glibc compat stub
-      run: gcc -c -o /tmp/glibc_compat.o ${{ steps.build_paths.outputs.SOURCE }}/osquery/wrapper/glibc_compat.c
-
-    - name: Package SDK
       run: |
-        SDK=/tmp/osquery-sdk
-        BUILD=${{ steps.build_paths.outputs.BINARY }}
-        # Copy wrapper
-        cp $BUILD/osquery/wrapper/libosquery_wrapper.a $SDK/lib/
-        # Copy specs tables
-        mkdir -p $SDK/lib/deps
-        cp $BUILD/specs/libcodegen_native_tables.a $SDK/lib/deps/
-        cp $BUILD/specs/libcodegen_foreign_tables.a $SDK/lib/deps/
-        # Copy ALL .a files from build
-        find $BUILD/osquery/ $BUILD/plugins/ $BUILD/libs/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
-        find $BUILD/installed_formulas/ $BUILD/openssl/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
-        # Strip
-        find $SDK/lib -name "*.a" -exec strip --strip-debug {} \; 2>/dev/null
-        # Generate pkg-config
-        SPECS="$SDK/lib/deps/libcodegen_native_tables.a $SDK/lib/deps/libcodegen_foreign_tables.a"
-        DEPS=""
-        for f in $SDK/lib/libosquery_*.a $SDK/lib/libplugins_*.a $SDK/lib/libthirdparty_*.a; do
-          [ -f "$f" ] && DEPS="$DEPS $f"
-        done
-        for f in $SDK/lib/libssl.a $SDK/lib/libcrypto.a; do
-          [ -f "$f" ] && DEPS="$DEPS $f"
-        done
-        CXX_LIBS="/usr/local/osquery-toolchain/usr/lib/libc++.a /usr/local/osquery-toolchain/usr/lib/libc++abi.a"
-        mkdir -p $SDK/lib/pkgconfig
-        cat > $SDK/lib/pkgconfig/osquery_wrapper.pc << 'PCEOF'
-        prefix=SDK_PATH
-        exec_prefix=${prefix}
-        libdir=${prefix}/lib
-        includedir=${prefix}/include
-        Name: osquery_wrapper
-        Description: osquery SQL engine C wrapper
-        Version: 5.12.0
-        Requires:
-        Libs: -L${libdir} -Wl,--whole-archive SPECS_PLACEHOLDER -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group -losquery_wrapper DEPS_PLACEHOLDER CXX_PLACEHOLDER -lm -lpthread -ldl -lresolv -lrt -Wl,--end-group
-        Cflags: -I${includedir}
-        PCEOF
-        sed -i "s|SDK_PATH|$SDK|g" $SDK/lib/pkgconfig/osquery_wrapper.pc
-        sed -i "s|SPECS_PLACEHOLDER|$SPECS|g" $SDK/lib/pkgconfig/osquery_wrapper.pc
-        sed -i "s|DEPS_PLACEHOLDER|$DEPS|g" $SDK/lib/pkgconfig/osquery_wrapper.pc
-        sed -i "s|CXX_PLACEHOLDER|$CXX_LIBS|g" $SDK/lib/pkgconfig/osquery_wrapper.pc
-        # Package
-        cd /tmp && tar czf osquery-sdk-linux-x86_64.tar.gz osquery-sdk/
-        ls -lh /tmp/osquery-sdk-linux-x86_64.tar.gz
+        # Create generated source files (if not exist) to avoid cppcheck errors
+        touch ${{ steps.build_paths.outputs.BINARY }}/osquery/empty_osqueryd_target_source_file.cpp
+        touch ${{ steps.build_paths.outputs.BINARY }}/specs/amalgamated_native_tables.cpp
+        touch ${{ steps.build_paths.outputs.BINARY }}/specs/amalgamated_foreign_tables.cpp
+        cmake --build . --target cppcheck 2>&1 | tee cppcheck_release.txt
 
-    - name: Upload artifact
+    - name: Store the cppcheck log (Release)
       uses: actions/upload-artifact@v7
       with:
-        name: osquery-sdk-linux-x86_64
-        path: /tmp/osquery-sdk-linux-x86_64.tar.gz
+        name: cppcheck-release
+        path: ${{ steps.build_paths.outputs.REL_BINARY }}/cppcheck_release.txt
 
-    - name: Save submodule cache
+    - name: Configure the project (Debug)
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
+      run: |
+        cmake -G "Unix Makefiles" \
+          -DOSQUERY_TOOLCHAIN_SYSROOT:PATH="/usr/local/osquery-toolchain" \
+          -DCMAKE_BUILD_TYPE:STRING=Debug \
+          -DOSQUERY_BUILD_TESTS=ON \
+          -DOSQUERY_BUILD_ROOT_TESTS=ON \
+          "${{ steps.build_paths.outputs.SOURCE }}"
+
+    - name: Initialize the project (Debug)
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      run: cmake --build . --target prepare_for_ide
+
+    - name: Run cppcheck (Debug)
+      shell: bash
+      id: debug_cppcheck_runner
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      run: cmake --build . --target cppcheck 2>&1 | tee cppcheck_debug.txt
+
+    - name: Store the cppcheck log (Debug)
+      uses: actions/upload-artifact@v7
+      with:
+        name: cppcheck-debug
+        path: ${{ steps.build_paths.outputs.REL_BINARY }}/cppcheck_debug.txt
+
+    - name: Save cache (git submodules)
       if: github.ref_name == github.event.repository.default_branch
       uses: actions/cache/save@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
         key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
 
-    - name: Save ccache
-      if: github.ref_name == github.event.repository.default_branch
-      uses: actions/cache/save@v6
-      with:
-        path: ${{ steps.build_paths.outputs.CCACHE }}
-        key: ccache_linux_wrapper_${{ github.sha }}
 
-  build_macos:
-    runs-on: macos-15
+  # The Linux build will only start once we know that the code
+  # has been properly formatted
+  build_linux:
+    needs: [check_code_style, check_libraries_manifest]
 
-    env:
-      MACOS_DEPLOYMENT_TARGET: "10.15"
+    strategy:
+      matrix:
+        build_type: [Release, RelWithDebInfo, Debug]
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-    - name: Setup build paths
+    - name: Disk space information
+      shell: bash
+      run: |
+        df -h
+        free -m
+
+    - name: Make space -- uninstalling packages
+      shell: bash
+      run: |
+        packages_to_remove=$(dpkg-query -f '${Package}\n' -W | grep "^clang-.*\|^llvm-.*\|^php.*\|^mono-.*\|^mongodb-.*\
+        \|^libmono-.*\|^temurin-8-jdk\|^temurin-11-jdk\|^temurin-17-jdk\|^dotnet-.*\|^google-chrome-stable\|^microsoft-edge-stable\
+        \|^google-cloud-sdk\|^google-cloud-api\|^azure-cli\|^firefox\|^php\|^hhvm\|^snapd")
+        sudo apt-get purge $packages_to_remove
+        sudo apt-get autoremove -y
+        sudo apt-get clean
+
+    - name: Make space -- removing runtimes
+      shell: bash
+      run: |
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc /usr/local/.ghcup
+
+    - name: Disk space information
+      shell: bash
+      run: |
+        df -h
+        free -m
+
+    - name: Install osquery-toolchain
+      run: |
+        wget https://github.com/osquery/osquery-toolchain/releases/download/${{ env.OSQUERY_TOOLCHAIN_VERSION }}/osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz 
+        sudo tar xvf osquery-toolchain-${{ env.OSQUERY_TOOLCHAIN_VERSION }}-$(uname -m).tar.xz -C /usr/local
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y elfutils python3-psutil python3-six python3-wheel linux-headers-generic ccache
+        pip3 install timeout_decorator thrift==0.11.0 osquery pexpect==3.3 docker
+
+
+    # Due to how the RPM packaging tools work, we have to adhere to some
+    # character count requirements in the build path vs source path.
+    #
+    # Failing to do so, will break the debuginfo RPM package.
+    - name: Setup the build paths
       id: build_paths
       run: |
-        mkdir -p workspace/build workspace/src workspace/ccache
-        echo "SOURCE=$(pwd)/workspace/src" >> $GITHUB_OUTPUT
-        echo "BINARY=$(pwd)/workspace/build" >> $GITHUB_OUTPUT
-        echo "CCACHE=$(pwd)/workspace/ccache" >> $GITHUB_OUTPUT
+        rel_build_path="workspace/usr/src/debug/osquery/build"
+        rel_src_path="workspace/padding-required-by-rpm-packages/src"
+        rel_ccache_path="workspace/ccache"
+        rel_package_data_path="workspace/package_data"
+        rel_packaging_path="workspace/osquery-packaging"
+        rel_package_build_path="workspace/package-build"
 
-    - name: Clone repository
+        mkdir -p ${rel_build_path} \
+                 ${rel_src_path} \
+                 ${rel_ccache_path} \
+                 ${rel_src_path} \
+                 ${rel_package_data_path} \
+                 ${rel_package_build_path}
+
+        echo "SOURCE=$(realpath ${rel_src_path})" >> $GITHUB_OUTPUT
+        echo "BINARY=$(realpath ${rel_build_path})" >> $GITHUB_OUTPUT
+        echo "CCACHE=$(realpath ${rel_ccache_path})" >> $GITHUB_OUTPUT
+        echo "PACKAGING=$(realpath ${rel_packaging_path})" >> $GITHUB_OUTPUT
+        echo "PACKAGE_DATA=$(realpath ${rel_package_data_path})" >> $GITHUB_OUTPUT
+        echo "REL_PACKAGE_BUILD=${rel_package_build_path}" >> $GITHUB_OUTPUT
+        echo "PACKAGE_BUILD=$(realpath ${rel_package_build_path})" >> $GITHUB_OUTPUT
+
+    - name: Clone the osquery repository
       uses: actions/checkout@v7
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
 
-    - name: Fetch all tags
-      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: git fetch --tags --force
+    - name: Select the build job count
+      shell: bash
+      id: build_job_count
+      run: echo "VALUE=$(($(nproc) + 1))" >> $GITHUB_OUTPUT
 
-    - name: Detect version
-      id: version
-      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
+    - name: Select the build options for the tests
+      shell: bash
+      id: tests_build_settings
       run: |
-        ver=$(git describe --tags --always 2>/dev/null || echo "0.0.0")
-        echo "VALUE=$ver" >> $GITHUB_OUTPUT
+        if [[ "${{ matrix.build_type }}" == "RelWithDebInfo" ]] ; then
+          echo "VALUE=OFF" >> $GITHUB_OUTPUT
+        else
+          echo "VALUE=ON" >> $GITHUB_OUTPUT
+        fi
 
-    - name: Install build dependencies
-      run: brew install ccache flex bison coreutils gnu-sed
+    - name: Get runner hardware info
+      shell: bash
+      id: runner_stats
+      run: |
+        df -h
+        echo "Cores: $(nproc)"
+        free -m
 
-    - name: Compute submodule hash
+    # We don't have enough space on the worker to actually generate all
+    # the debug symbols (osquery + dependencies), so we have a flag to
+    # disable them when running a Debug build
+    - name: Select the debug symbols options
+      shell: bash
+      id: debug_symbols_settings
+      run: |
+        if [[ "${{ matrix.build_type }}" == "Debug" ]] ; then
+          echo "VALUE=ON" >> $GITHUB_OUTPUT
+        else
+          echo "VALUE=OFF" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Clone the osquery-packaging repository
+      run: |
+        git clone ${{ env.PACKAGING_REPO }} \
+          ${{ steps.build_paths.outputs.PACKAGING }}
+        cd ${{ steps.build_paths.outputs.PACKAGING }}
+        git checkout ${{ env.PACKAGING_COMMIT }}
+
+    - name: Restore cache (ccache)
+      if: github.ref_type != 'tag'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.CCACHE }}
+        key: ccache_${{ matrix.os }}_${{ matrix.build_type }}
+
+    - name: Compute the submodule hash
       id: submodule_hash
-      run: echo "VALUE=$(git -C ${{ steps.build_paths.outputs.SOURCE }} submodule status --recursive | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+      shell: bash
+      run: echo "VALUE=$(git -C ${{ steps.build_paths.outputs.SOURCE }} submodule status --recursive | sha256sum | awk '{print $1}')" >> $GITHUB_OUTPUT
 
-    - name: Restore submodule cache
+    - name: Restore cache (git submodules)
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
         key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
         restore-keys: gitmodules_${{ runner.os }}
 
-    - name: Update submodules
+    - name: Update the git submodules
       working-directory: ${{ steps.build_paths.outputs.SOURCE }}
       run: git submodule sync --recursive
-
-    - name: Restore ccache
-      uses: actions/cache/restore@v6
-      with:
-        path: ${{ steps.build_paths.outputs.CCACHE }}
-        key: ccache_macos_wrapper
 
     - name: Configure ccache
       run: echo "CCACHE_CONFIGPATH=${{ steps.build_paths.outputs.SOURCE }}/ccache.conf" >> $GITHUB_ENV
 
-    - name: Configure
+    - name: Configure the project
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
       env:
         CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+
       run: |
         cmake -G "Unix Makefiles" \
-          -DCMAKE_OSX_ARCHITECTURES="arm64" \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}" \
-          -DCMAKE_BUILD_TYPE:STRING=Release \
-          -DOSQUERY_BUILD_TESTS=OFF \
-          -DOSQUERY_BUILD_AWS=OFF \
-          -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
+          -DOSQUERY_NO_DEBUG_SYMBOLS=${{ steps.debug_symbols_settings.outputs.VALUE }} \
+          -DOSQUERY_TOOLCHAIN_SYSROOT:PATH="/usr/local/osquery-toolchain" \
+          -DCMAKE_BUILD_TYPE:STRING="${{ matrix.build_type }}" \
+          -DOSQUERY_BUILD_TESTS=${{ steps.tests_build_settings.outputs.VALUE }} \
+          -DOSQUERY_BUILD_ROOT_TESTS=${{ steps.tests_build_settings.outputs.VALUE }} \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
-    - name: Build
-      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+    - name: Zero ccache stats
       env:
         CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
-      run: |
-        ccache --zero-stats
-        cmake --build . -j $(($(sysctl -n hw.logicalcpu) + 1))
-        ccache -s
+      run: ccache --zero-stats
 
-    - name: Install SDK
+    - name: Build the project
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
-      run: cmake --install . --prefix /tmp/osquery-sdk 2>/dev/null || true
 
-    - name: Package SDK
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+
+      run: cmake --build . -j ${{ steps.build_job_count.outputs.VALUE }}
+
+    - name: Print ccache stats
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+      run: ccache -s
+
+    - name: Disk space information
+      shell: bash
+      id: disk_space_info_post_build
       run: |
-        SDK=/tmp/osquery-sdk
-        BUILD=${{ steps.build_paths.outputs.BINARY }}
-        cp $BUILD/osquery/wrapper/libosquery_wrapper.a $SDK/lib/
-        mkdir -p $SDK/lib/deps
-        cp $BUILD/specs/libcodegen_native_tables.a $SDK/lib/deps/
-        cp $BUILD/specs/libcodegen_foreign_tables.a $SDK/lib/deps/
-        find $BUILD/osquery/ $BUILD/plugins/ $BUILD/libs/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
-        find $BUILD/installed_formulas/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
-        find $SDK/lib -name "*.a" -exec strip -x {} \; 2>/dev/null
-        # Generate pkg-config
-        SPECS="$SDK/lib/deps/libcodegen_native_tables.a $SDK/lib/deps/libcodegen_foreign_tables.a"
-        DEPS=""
-        for f in $SDK/lib/libosquery_*.a $SDK/lib/libplugins_*.a $SDK/lib/libthirdparty_*.a; do
-          [ -f "$f" ] && DEPS="$DEPS $f"
-        done
-        mkdir -p $SDK/lib/pkgconfig
-        cat > $SDK/lib/pkgconfig/osquery_wrapper.pc << PCEOF
-        prefix=$SDK
-        exec_prefix=\${prefix}
-        libdir=\${prefix}/lib
-        includedir=\${prefix}/include
-        Name: osquery_wrapper
-        Description: osquery SQL engine C wrapper
-        Version: 5.12.0
-        Requires:
-        Libs: -L\${libdir} -Wl,--whole-archive $SPECS -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group -losquery_wrapper $DEPS -lc++ -lc++abi -lm -lpthread -ldl -lresolv -lrt -Wl,--end-group
-        Cflags: -I\${includedir}
-        PCEOF
-        cd /tmp && tar czf osquery-sdk-macos-arm64.tar.gz osquery-sdk/
-        ls -lh /tmp/osquery-sdk-macos-arm64.tar.gz
+        df -h
+        du -sh ${{ steps.build_paths.outputs.BINARY }}
 
-    - name: Upload artifact
+    # Only run the tests on Debug and Release configurations; skip RelWithDebInfo
+    - name: Run the tests as normal user
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      if: matrix.build_type != 'RelWithDebInfo'
+      run: |
+        # Allow access to the docker socket
+        sudo chmod 666 /var/run/docker.sock
+        ctest --build-nocmake -LE "root-required" -V
+
+    - name: Run the tests as root user
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      if: matrix.build_type != 'RelWithDebInfo'
+      run: sudo -u root ctest --build-nocmake -L "root-required" -V
+
+    - name: Run the install target
+      if: matrix.build_type == 'RelWithDebInfo'
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+        DESTDIR: ${{ steps.build_paths.outputs.PACKAGE_DATA }}
+
+      run: |
+        cmake \
+          --build . \
+          --target install \
+          -j ${{ steps.build_job_count.outputs.VALUE }}
+
+    - name: Create the packages
+      if: matrix.build_type == 'RelWithDebInfo'
+      working-directory: ${{ steps.build_paths.outputs.PACKAGE_BUILD }}
+
+      shell: bash
+
+      run: |
+        osquery_version=$(cd ${{ steps.build_paths.outputs.SOURCE }} && git describe --tags --always )
+
+        tar pcvzf package_data.tar.gz \
+          ${{ steps.build_paths.outputs.PACKAGE_DATA }}
+
+        package_format_list=( "DEB" "RPM" "TGZ" )
+
+        for package_format in "${package_format_list[@]}" ; do
+          cmake -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCPACK_GENERATOR=${package_format} \
+            -DOSQUERY_PACKAGE_VERSION=${osquery_version} \
+            -DOSQUERY_DATA_PATH=${{ steps.build_paths.outputs.PACKAGE_DATA }} \
+            -DOSQUERY_SOURCE_DIRECTORY_LIST="${{ steps.build_paths.outputs.SOURCE }};${{ steps.build_paths.outputs.BINARY }}" \
+            ${{ steps.build_paths.outputs.PACKAGING }}
+
+          cmake --build . \
+            --target package
+        done
+
+    - name: Set architecture suffix
+      if: matrix.build_type == 'RelWithDebInfo'
+      id: arch
+      shell: bash
+      run: |
+        arch=$(uname -m)
+        if [ "$arch" == "x86_64" ]; then
+          echo "suffix=" >> $GITHUB_OUTPUT
+          echo "arch=x86_64" >> $GITHUB_OUTPUT
+        else
+          echo "suffix=_aarch64" >> $GITHUB_OUTPUT
+          echo "arch=aarch64" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Locate the packages
+      if: matrix.build_type == 'RelWithDebInfo'
+      id: packages
+      shell: bash
+      run: |
+        echo "REL_UNSIGNED_RELEASE_PACKAGE_DATA_PATH=${{ steps.build_paths.outputs.REL_PACKAGE_BUILD }}/package_data.tar.gz" >> $GITHUB_OUTPUT
+        echo "REL_UNSIGNED_RELEASE_DEB_PATH=$(ls ${{ steps.build_paths.outputs.REL_PACKAGE_BUILD }}/*.deb)" >> $GITHUB_OUTPUT
+        echo "REL_UNSIGNED_DEBUG_DEB_PATH=$(ls ${{ steps.build_paths.outputs.REL_PACKAGE_BUILD }}/*.ddeb)" >> $GITHUB_OUTPUT
+        echo "REL_UNSIGNED_RELEASE_RPM_PATH=$(ls ${{ steps.build_paths.outputs.REL_PACKAGE_BUILD }}/osquery-?.*.rpm)" >> $GITHUB_OUTPUT
+        echo "REL_UNSIGNED_DEBUG_RPM_PATH=$(ls ${{ steps.build_paths.outputs.REL_PACKAGE_BUILD }}/osquery-debuginfo-*.rpm)" >> $GITHUB_OUTPUT
+        echo "REL_UNSIGNED_RELEASE_TGZ_PATH=$(ls ${{ steps.build_paths.outputs.REL_PACKAGE_BUILD }}/*linux_${{ steps.arch.outputs.arch }}.tar.gz)" >> $GITHUB_OUTPUT
+
+    - name: Store the unsigned release package data artifact
+      if: matrix.build_type == 'RelWithDebInfo'
       uses: actions/upload-artifact@v7
       with:
-        name: osquery-sdk-macos-arm64
-        path: /tmp/osquery-sdk-macos-arm64.tar.gz
+        name: linux_unsigned_release_package_data${{ steps.arch.outputs.suffix }}
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_PACKAGE_DATA_PATH }}
 
-    - name: Save submodule cache
-      if: github.ref_name == github.event.repository.default_branch
+    - name: Store the unsigned release DEB artifact
+      if: matrix.build_type == 'RelWithDebInfo'
+      uses: actions/upload-artifact@v7
+      with:
+        name: linux_unsigned_release_deb${{ steps.arch.outputs.suffix }}
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_DEB_PATH }}
+
+    - name: Store the unsigned debug DEB artifact
+      if: matrix.build_type == 'RelWithDebInfo'
+      uses: actions/upload-artifact@v7
+      with:
+        name: linux_unsigned_debug_deb${{ steps.arch.outputs.suffix }}
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_DEBUG_DEB_PATH }}
+
+    - name: Store the unsigned release RPM artifact
+      if: matrix.build_type == 'RelWithDebInfo'
+      uses: actions/upload-artifact@v7
+      with:
+        name: linux_unsigned_release_rpm${{ steps.arch.outputs.suffix }}
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_RPM_PATH }}
+
+    - name: Store the unsigned debug RPM artifact
+      if: matrix.build_type == 'RelWithDebInfo'
+      uses: actions/upload-artifact@v7
+      with:
+        name: linux_unsigned_debug_rpm${{ steps.arch.outputs.suffix }}
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_DEBUG_RPM_PATH }}
+
+    - name: Store the unsigned release TGZ artifact
+      if: matrix.build_type == 'RelWithDebInfo'
+      uses: actions/upload-artifact@v7
+      with:
+        name: linux_unsigned_release_tgz${{ steps.arch.outputs.suffix }}
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_TGZ_PATH }}
+
+    # Before we terminate this job, delete the build folder. The cache
+    # actions will require the disk space to create the archives.
+    - name: Reclaim disk space
+      run: rm -rf ${{ steps.build_paths.outputs.BINARY }}
+
+    - name: Save cache (git submodules)
+      if: github.ref_name == github.event.repository.default_branch && matrix.build_type == 'Release'
       uses: actions/cache/save@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
         key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
 
-    - name: Save ccache
+    - name: Save cache (ccache)
       if: github.ref_name == github.event.repository.default_branch
       uses: actions/cache/save@v6
       with:
         path: ${{ steps.build_paths.outputs.CCACHE }}
-        key: ccache_macos_wrapper_${{ github.sha }}
+        key: ccache_${{ matrix.os }}_${{ matrix.build_type }}_${{ github.sha }}
 
-  build_windows:
-    runs-on: windows-2022
+
+  # The macOS build will only start once we know that the code
+  # has been properly formatted
+  build_macos:
+    needs: [check_code_style, check_libraries_manifest]
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        build_type: [Release, Debug]
+        architecture: [x86_64, arm64]
+        os: [macos-26, macos-15]
+
+    env:
+      MACOS_DEPLOYMENT_TARGET: 10.15
 
     steps:
+    - name: Select the build job count
+      shell: bash
+      id: build_job_count
+      run: echo "VALUE=$(($(sysctl -n hw.logicalcpu) + 1))" >> $GITHUB_OUTPUT
+
+    - name: Setup the build paths
+      shell: bash
+      id: build_paths
+      run: |
+        rel_build_path="workspace/build"
+        rel_src_path="workspace/src"
+        rel_ccache_path="workspace/ccache"
+        rel_downloads_path="workspace/downloads"
+        rel_install_path="workspace/install"
+        rel_package_data_path="workspace/package_data"
+        rel_packaging_path="workspace/osquery-packaging"
+        rel_package_build_path="workspace/package-build"
+
+        mkdir -p ${rel_build_path} \
+                 ${rel_ccache_path} \
+                 ${rel_downloads_path} \
+                 ${rel_install_path} \
+                 ${rel_package_data_path} \
+                 ${rel_package_build_path}
+
+        echo "SOURCE=$(pwd)/${rel_src_path}" >> $GITHUB_OUTPUT
+        echo "REL_SOURCE=${rel_src_path}" >> $GITHUB_OUTPUT
+        echo "BINARY=$(pwd)/${rel_build_path}" >> $GITHUB_OUTPUT
+        echo "CCACHE=$(pwd)/${rel_ccache_path}" >> $GITHUB_OUTPUT
+        echo "DOWNLOADS=$(pwd)/${rel_downloads_path}" >> $GITHUB_OUTPUT
+        echo "INSTALL=$(pwd)/${rel_install_path}" >> $GITHUB_OUTPUT
+        echo "PACKAGING=$(pwd)/${rel_packaging_path}" >> $GITHUB_OUTPUT
+        echo "PACKAGE_DATA=$(pwd)/${rel_package_data_path}" >> $GITHUB_OUTPUT
+        echo "REL_PACKAGE_BUILD=${rel_package_build_path}" >> $GITHUB_OUTPUT
+        echo "PACKAGE_BUILD=$(pwd)/${rel_package_build_path}" >> $GITHUB_OUTPUT
+
+    - name: Clone the osquery repository
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+        path: ${{ steps.build_paths.outputs.REL_SOURCE }}
+
+    - name: Get runner hardware info
+      shell: bash
+      id: runner_stats
+      run: |
+        df -h
+        echo "Cores: $(sysctl -n hw.logicalcpu)"
+        vm_stat
+
+    - name: Restore cache (ccache)
+      if: github.ref_type != 'tag'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.CCACHE }}
+        key: ccache_${{ matrix.os }}_${{ matrix.architecture }}_${{ matrix.build_type }}
+
+    - name: Compute the submodule hash
+      id: submodule_hash
+      shell: bash
+      run: echo "VALUE=$(git -C ${{ steps.build_paths.outputs.SOURCE }} submodule status --recursive | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+    - name: Restore cache (git submodules)
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
+        key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
+        restore-keys: gitmodules_${{ runner.os }}
+
+    - name: Update the git submodules
+      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
+      run: git submodule sync --recursive
+
+    - name: Install build dependencies
+      run: |
+        brew install \
+          ccache \
+          flex \
+          bison \
+          coreutils \
+          gnu-sed
+
+    - name: Setup python
+      uses: actions/setup-python@v7
+      with:
+        # Pin an exact python version to avoid mismatches between this builder and the test_older_macos runner
+        python-version: '3.13.1'
+        architecture: arm64
+
+    - name: Install tests dependencies
+      id: install_test_deps
+      run: |
+        pip3 install setuptools \
+                      pexpect==3.3 \
+                      psutil \
+                      timeout_decorator \
+                      six \
+                      thrift==0.11.0 \
+                      osquery
+
+    - name: Install CMake
+      shell: bash
+      run: |
+        ${{ steps.build_paths.outputs.REL_SOURCE }}/tools/ci/scripts/macos/install_cmake.sh \
+          "${{ steps.build_paths.outputs.DOWNLOADS }}" \
+          "${{ steps.build_paths.outputs.INSTALL }}" \
+          "3.21.4"
+
+    # We don't have enough space on the worker to actually generate all
+    # the debug symbols (osquery + dependencies), so we have a flag to
+    # disable them when running a Debug build
+    - name: Select the debug symbols options
+      shell: bash
+      id: debug_symbols_settings
+      run: |
+        if [[ "${{ matrix.build_type }}" == "Debug" ]] ; then
+          echo "VALUE=ON" >> $GITHUB_OUTPUT
+        else
+          echo "VALUE=OFF" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Configure ccache
+      run: echo "CCACHE_CONFIGPATH=${{ steps.build_paths.outputs.SOURCE }}/ccache.conf" >> $GITHUB_ENV
+
+    - name: Configure the project
+      shell: bash
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+
+      run: |
+        cmake -G "Unix Makefiles" \
+          -DCMAKE_OSX_ARCHITECTURES="${{ matrix.architecture }}" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}" \
+          -DCMAKE_BUILD_TYPE:STRING="${{ matrix.build_type }}" \
+          -DOSQUERY_BUILD_TESTS=ON \
+          -DOSQUERY_NO_DEBUG_SYMBOLS=${{ steps.debug_symbols_settings.outputs.VALUE }} \
+          ${{ steps.build_paths.outputs.SOURCE }}
+
+    - name: Zero ccache stats
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+      run: ccache --zero-stats
+
+    - name: Build the project
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+
+      run: cmake --build . -j ${{ steps.build_job_count.outputs.VALUE }}
+
+    - name: Print ccache stats
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+      run: ccache -s
+
+    - name: Disk space information
+      shell: bash
+      id: disk_space_info_post_build
+      run: |
+        df -h
+        du -sh ${{ steps.build_paths.outputs.BINARY }}
+
+    - name: Run the tests
+      if: matrix.architecture == 'arm64'
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+      run: ctest --build-nocmake -V
+
+    - name: Run the install target
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
+        DESTDIR: ${{ steps.build_paths.outputs.PACKAGE_DATA }}
+
+      run: |
+        cmake \
+          --build . \
+          --target install \
+          -j ${{ steps.build_job_count.outputs.VALUE }}
+
+    - name: Create the package data
+      working-directory: ${{ steps.build_paths.outputs.PACKAGE_BUILD }}
+      run: tar pcvzf package_data.tar.gz -C ${{ steps.build_paths.outputs.PACKAGE_DATA }} .
+
+    - name: Locate the package data
+      if: matrix.build_type == 'Release'
+      id: packages
+      shell: bash
+      run: echo "REL_UNSIGNED_RELEASE_PACKAGE_DATA_PATH=$(ls ${{ steps.build_paths.outputs.REL_PACKAGE_BUILD }}/package_data.tar.gz)" >> $GITHUB_OUTPUT
+
+    - name: Store the ${{ matrix.architecture }} unsigned release package data artifact
+      if: matrix.build_type == 'Release' && matrix.os == 'macos-26'
+      uses: actions/upload-artifact@v7
+      with:
+        name: macos_unsigned_release_package_data_${{ matrix.architecture }}
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_PACKAGE_DATA_PATH }}
+
+    # Before we terminate this job, delete the build folder. The cache
+    # actions will require the disk space to create the archives.
+    - name: Reclaim disk space
+      run: rm -rf ${{ steps.build_paths.outputs.BINARY }}
+
+    - name: Save cache (git submodules)
+      if: github.ref_name == github.event.repository.default_branch && matrix.architecture == 'arm64' && matrix.build_type == 'Release'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SOURCE }}/.git/modules
+        key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
+
+    - name: Save cache (ccache)
+      if: github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.build_paths.outputs.CCACHE }}
+        key: ccache_${{ matrix.os }}_${{ matrix.architecture }}_${{ matrix.build_type }}_${{ github.sha }}
+
+  # This job builds the universal macOS artifacts
+  build_universal_macos_artifacts:
+    needs: build_macos
+
+    runs-on: macos-26
+
+    steps:
+      - name: Clone the osquery repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install CMake
+        shell: bash
+        run: |
+          mkdir -p "workspace/downloads" \
+                   "workspace/install"
+
+          ./tools/ci/scripts/macos/install_cmake.sh \
+            "workspace/downloads" \
+            "workspace/install" \
+            "3.21.4"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos_unsigned_release_package_data_x86_64
+          path: macos_unsigned_release_package_data_x86_64
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos_unsigned_release_package_data_arm64
+          path: macos_unsigned_release_package_data_arm64
+
+      - name: Create the universal package data
+        run: tools/ci/scripts/macos/build_universal_package_data.sh
+
+      - name: Store the universal unsigned release package data artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos_unsigned_release_package_data_universal
+          path: package_data.tar.gz
+
+      - name: Clone the osquery-packaging repository
+        run: |
+          git clone ${{ env.PACKAGING_REPO }} osquery-packaging
+
+          cd osquery-packaging
+          git checkout ${{ env.PACKAGING_COMMIT }}
+
+      - name: Create the packages
+        shell: bash
+        run: |
+          osquery_version=$(git describe --tags --always )
+          package_format_list=( "productbuild" "TGZ" )
+
+          for package_format in "${package_format_list[@]}" ; do
+            cmake -DCMAKE_BUILD_TYPE=Release \
+              -DCPACK_GENERATOR=${package_format} \
+              -DOSQUERY_PACKAGE_VERSION=${osquery_version} \
+              -DOSQUERY_DATA_PATH=$(pwd)/universal \
+              -S osquery-packaging \
+              -B package_build
+
+            cmake --build package_build \
+              --target package
+          done
+
+      - name: Locate the packages
+        id: packages
+        shell: bash
+        run: |
+          echo "REL_UNSIGNED_RELEASE_PKG_PATH=$(ls package_build/*.pkg)" >> $GITHUB_OUTPUT
+          echo "REL_UNSIGNED_RELEASE_TGZ_PATH=$(ls package_build/*.tar.gz)" >> $GITHUB_OUTPUT
+
+      - name: Store the PKG unsigned release packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos_unsigned_pkg_universal
+          path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_PKG_PATH }}
+
+      - name: Store the TGZ unsigned release packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos_unsigned_tgz_universal
+          path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_TGZ_PATH }}
+
+
+
+
+  # The Windows build will only start once we know that the code
+  # has been properly formatted
+  build_windows:
+    needs: [check_code_style, check_libraries_manifest]
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        build_type: [Release]
+        bitness: [64, arm64]
+        os: [windows-2022]
+
+    steps:
+    - name: Select the build job count
+      shell: powershell
+      id: build_job_count
+      run: |
+        $cores=(Get-CIMInstance Win32_ComputerSystem).NumberOfLogicalProcessors + 1
+        echo "VALUE=$cores" >> $env:GITHUB_OUTPUT
+
+    - name: Setup the build paths
+      shell: powershell
+      id: build_paths
+      run: |
+        $rel_src_path = "w\src"
+        $rel_build_path = "w\build"
+        $rel_sccache_path = "w\sccache"
+        $rel_downloads_path = "w\downloads"
+        $rel_install_path = "w\install"
+        $rel_package_data_path = "w\package_data"
+        $rel_packaging_path = "w\osquery-packaging"
+        $rel_packaging_build = "w\package-build"
+
+        New-Item -ItemType Directory -Force -Path $rel_build_path
+        New-Item -ItemType Directory -Force -Path $rel_sccache_path
+        New-Item -ItemType Directory -Force -Path $rel_downloads_path
+        New-Item -ItemType Directory -Force -Path $rel_install_path
+        New-Item -ItemType Directory -Force -Path $rel_package_data_path
+        New-Item -ItemType Directory -Force -Path $rel_packaging_build
+
+        $base_dir = (Get-Item .).FullName
+
+        echo "SOURCE=$base_dir\$rel_src_path" >> $env:GITHUB_OUTPUT
+        echo "REL_SOURCE=$rel_src_path" >> $env:GITHUB_OUTPUT
+        echo "BINARY=$base_dir\$rel_build_path" >> $env:GITHUB_OUTPUT
+        echo "SCCACHE=$base_dir\$rel_sccache_path" >> $env:GITHUB_OUTPUT
+        echo "DOWNLOADS=$base_dir\$rel_downloads_path" >> $env:GITHUB_OUTPUT
+        echo "INSTALL=$base_dir\$rel_install_path" >> $env:GITHUB_OUTPUT
+        echo "PACKAGING=$base_dir\$rel_packaging_path" >> $env:GITHUB_OUTPUT
+        echo "PACKAGE_DATA=$base_dir\$rel_package_data_path" >> $env:GITHUB_OUTPUT
+        echo "PACKAGE_BUILD=$base_dir\$rel_packaging_build" >> $env:GITHUB_OUTPUT
+
+    - name: Setup the VC arch
+      shell: powershell
+      id: vc_arch
+      run: |
+        $arch = switch ("${{ matrix.bitness }}")
+        {
+            "64" { "x64" }
+            "arm64" { "x64_arm64" }
+        }
+        echo "VC_ARCH=$arch" >> $env:GITHUB_OUTPUT
+
+    # Symbolic links are supported by default on Linux and macOS. On
+    # Windows, we have to enable them explicitly. They are used to
+    # handle the include header namespace support that came with
+    # the initial Buck build system refactor
     - name: Configure git
       run: |
         git config --global core.autocrlf false
         git config --global core.symlinks true
-        git config --global core.longpaths true
 
-    - name: Setup build paths
-      id: build_paths
-      shell: powershell
-      run: |
-        New-Item -ItemType Directory -Force -Path "w\build","w\src","w\sccache","w\downloads","w\install"
-        $base = (Get-Item .).FullName
-        echo "SOURCE=$base\w\src" >> $env:GITHUB_OUTPUT
-        echo "BINARY=$base\w\build" >> $env:GITHUB_OUTPUT
-        echo "SCCACHE=$base\w\sccache" >> $env:GITHUB_OUTPUT
-        echo "DOWNLOADS=$base\w\downloads" >> $env:GITHUB_OUTPUT
-        echo "INSTALL=$base\w\install" >> $env:GITHUB_OUTPUT
-
-    - name: Clone repository
+    - name: Clone the osquery repository
       uses: actions/checkout@v7
       with:
-        path: ${{ steps.build_paths.outputs.SOURCE }}
         fetch-depth: 0
+        path: ${{ steps.build_paths.outputs.REL_SOURCE }}
 
-    - name: Fetch all tags
-      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: git fetch --tags --force
-
-    - name: Detect version
-      id: version
+    - name: Get runner hardware info
+      id: runner_stats
       shell: powershell
-      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
       run: |
-        $ver = (git describe --tags --always 2>$null)
-        if (-not $ver) { $ver = "0.0.0" }
-        echo "VALUE=$ver" >> $env:GITHUB_OUTPUT
+        Get-CIMInstance Win32_LogicalDisk
+        Get-CIMInstance Win32_ComputerSystem | Select-Object -Property NumberOfLogicalProcessors
+        Get-CIMInstance Win32_ComputerSystem | Select-Object -Property TotalPhysicalMemory
 
-    - name: Compute submodule hash
+    - name: Detect the osquery version
+      shell: powershell
+      id: osquery_version
+      run: |
+        cd ${{ steps.build_paths.outputs.SOURCE }}
+        $osquery_version=$(git describe --tags --abbrev=0)
+
+        echo "VALUE=$osquery_version" >> $env:GITHUB_OUTPUT
+
+    - name: Clone the osquery-packaging repository
+      run: |
+        cd w
+        git clone ${{ env.PACKAGING_REPO }}
+        cd ${{ steps.build_paths.outputs.PACKAGING }}
+        git checkout ${{ env.PACKAGING_COMMIT }}
+
+    - name: Compute the submodule hash
       id: submodule_hash
       shell: powershell
       run: |
-        $inputStr = (git -C "${{ steps.build_paths.outputs.SOURCE }}" submodule status --recursive) -join "`n"
+        $inputStr = (git -C "${{ steps.build_paths.outputs.REL_SOURCE }}" submodule status --recursive) -join "`n"
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($inputStr)
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
         $hash = [BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace("-","").ToLower()
         echo "VALUE=$hash" >> $env:GITHUB_OUTPUT
 
-    - name: Restore submodule cache
+    - name: Restore cache (git submodules)
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}\.git\modules
         key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
         restore-keys: gitmodules_${{ runner.os }}
 
-    - name: Update submodules
-      working-directory: ${{ steps.build_paths.outputs.SOURCE }}
-      run: git submodule sync --recursive
+    - name: Initialize the Python 3 installation
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.13.x"
+        architecture: x64
+
+    # The runners will likely have both the x86 and x64 versions of
+    # Python but we always need the 64-bit one regardless of which
+    # architecture we are building for.
+    #
+    # The setup-python action should have put the right Python version
+    # in the PATH variable for us, so locate the installation directory
+    # so we can use it as a hint when we configure the project with
+    # CMake
+    - name: Locate the Python root directory
+      id: python_root_directory
+      shell: powershell
+      run: |
+        $python_executable_path = $(Get-Command python.exe | Select-Object -ExpandProperty Definition)
+        $python_root_directory = (Get-Item $python_executable_path).Directory.FullName
+
+        echo "VALUE=$python_root_directory" >> $env:GITHUB_OUTPUT
+
+    # Install the Python dependencies needed for our testing framework
+    - name: Install tests prerequisites
+      run: |
+        python -m pip install --upgrade pip
+
+        python -m pip install wheel `
+                              setuptools `
+                              psutil `
+                              timeout_decorator `
+                              thrift==0.11.0 `
+                              osquery `
+                              pywin32
 
     - name: Install CMake
       working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
       shell: powershell
       run: |
-        $ver = "3.21.4"
-        $short = ($ver.Split('.')[0..1] -join '.')
-        $folder = "cmake-$ver-windows-x86_64"
-        $url = "https://cmake.org/files/v$short/$folder.zip"
-        (New-Object System.Net.WebClient).DownloadFile($url, "$folder.zip")
-        7z x -o${{ steps.build_paths.outputs.INSTALL }} -y "$folder.zip"
-        echo "${{ steps.build_paths.outputs.INSTALL }}\$folder\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        $long_cmake_ver = "3.21.4"
+        $short_cmake_ver = $($long_cmake_ver.split(".")[0] + "." + $long_cmake_ver.split(".")[1])
 
-    - name: Install Ninja
-      working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
-      shell: powershell
-      run: |
-        $url = "https://github.com/ninja-build/ninja/releases/download/v1.10.0/ninja-win.zip"
-        (New-Object System.Net.WebClient).DownloadFile($url, "ninja-win.zip")
-        7z x -o${{ steps.build_paths.outputs.INSTALL }}\ninja -y ninja-win.zip
-        echo "${{ steps.build_paths.outputs.INSTALL }}\ninja" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        $folder_name = $("cmake-" + $long_cmake_ver + "-windows-x86_64")
+        $archive_name = $($folder_name + ".zip")
+
+        $url = $("https://cmake.org/files/v" + $short_cmake_ver + "/" + $archive_name)
+
+        (New-Object System.Net.WebClient).DownloadFile($url, $archive_name)
+        7z x -o${{ steps.build_paths.outputs.INSTALL }} -y $archive_name
+
+        echo "${{ steps.build_paths.outputs.INSTALL }}\$folder_name\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
     - name: Install sccache
       working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
       shell: powershell
       run: |
-        $url = "https://github.com/osquery/sccache/releases/download/0.0.1-osquery/sccache-0.0.1-windows.7z"
-        (New-Object System.Net.WebClient).DownloadFile($url, "sccache-0.0.1-windows.7z")
-        7z x -o${{ steps.build_paths.outputs.INSTALL }}\sccache -y sccache-0.0.1-windows.7z
+        $long_version = "0.0.1"
+
+        $archive_name = $("sccache-" + $long_version + "-windows.7z")
+        $url = $("https://github.com/osquery/sccache/releases/download/" + $long_version + "-osquery/" + $archive_name)
+
+        (New-Object System.Net.WebClient).DownloadFile($url, $archive_name)
+        7z x -o${{ steps.build_paths.outputs.INSTALL }}\sccache -y $archive_name
+
         echo "${{ steps.build_paths.outputs.INSTALL }}\sccache" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-    - name: Restore sccache
-      uses: actions/cache/restore@v6
-      with:
-        path: ${{ steps.build_paths.outputs.SCCACHE }}
-        key: sccache_${{ runner.os }}_wrapper
+    - name: Install Ninja
+      working-directory: ${{ steps.build_paths.outputs.DOWNLOADS }}
+      shell: powershell
+      run: |
+        $long_version = "1.10.0"
 
-    - name: Configure
+        $archive_name = "ninja-win.zip"
+        $url = $("https://github.com/ninja-build/ninja/releases/download/v" + $long_version + "/" + $archive_name)
+
+        (New-Object System.Net.WebClient).DownloadFile($url, $archive_name)
+        7z x -o${{ steps.build_paths.outputs.INSTALL }}\ninja -y $archive_name
+
+        echo "${{ steps.build_paths.outputs.INSTALL }}\ninja" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Configure the project
       shell: cmd
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
       env:
         SCCACHE_DIR: ${{ steps.build_paths.outputs.SCCACHE }}
         SCCACHE_CACHE_SIZE: "5G"
+
       run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ steps.vc_arch.outputs.VC_ARCH }}
         @echo on
+
+        set cross_compilation=
+        if ${{ matrix.bitness }}==arm64 (
+            echo set (CMAKE_SYSTEM_NAME Windows^) > cross.cmake
+            echo set (CMAKE_SYSTEM_PROCESSOR ARM64^) >> cross.cmake
+            set cross_compilation=-DCMAKE_TOOLCHAIN_FILE=cross.cmake
+        )
+
         cmake -G Ninja ^
           -DCMAKE_C_COMPILER=cl.exe ^
           -DCMAKE_CXX_COMPILER=cl.exe ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DOSQUERY_BUILD_TESTS=OFF ^
-          -DOSQUERY_BUILD_AWS=OFF ^
-          -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" ^
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ^
+          -DOSQUERY_BUILD_TESTS=ON ^
           -DCMAKE_C_COMPILER_LAUNCHER="sccache.exe" ^
           -DCMAKE_CXX_COMPILER_LAUNCHER="sccache.exe" ^
-          "${{ steps.build_paths.outputs.SOURCE }}"
+          -DPython3_ROOT_DIR=${{ steps.python_root_directory.outputs.VALUE }} ^
+          ${{ steps.build_paths.outputs.SOURCE }} ^
+          %cross_compilation%
 
-    - name: Build
+    - name: Restore cache (sccache)
+      uses: actions/cache/restore@v6
+      if: github.ref_type != 'tag'
+      with:
+        path: ${{ steps.build_paths.outputs.SCCACHE }}
+        key: sccache_${{ matrix.os }}_${{ matrix.bitness }}_${{ matrix.build_type }}
+
+    - name: Build the project
       shell: cmd
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
       env:
         SCCACHE_DIR: ${{ steps.build_paths.outputs.SCCACHE }}
         SCCACHE_CACHE_SIZE: "5G"
-      run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-        @echo on
-        sccache.exe --zero-stats
-        cmake --build . -j %NUMBER_OF_PROCESSORS%
-        sccache.exe --show-stats
 
-    - name: Install SDK
+      run: |
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ steps.vc_arch.outputs.VC_ARCH }}
+        @echo on
+
+        sccache.exe --zero-stats
+
+        cmake --build . -j ${{ steps.build_job_count.outputs.VALUE }}
+
+        if %errorlevel% neq 0 exit /b %errorlevel%
+        sccache.exe --show-stats
+        sccache.exe --stop-server
+
+    - name: Disk space information
+      id: disk_space_info_post_build
+      shell: powershell
+      run: |
+        Get-CIMInstance Win32_LogicalDisk
+        $bindir_size = (Get-ChildItem -Path ${{ steps.build_paths.outputs.BINARY }} -Recurse | Measure-Object -Property Length -Sum).sum / 1MB
+        echo "Binary dir size: $bindir_size MBs"
+
+    - name: Run the tests
+      # arm64 tests can't be run on x64 machine
+      if: matrix.bitness != 'arm64'
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       shell: cmd
       run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ steps.vc_arch.outputs.VC_ARCH }}
         @echo on
-        cmake --install . --prefix w\osquery-sdk 2>nul
-        exit /b 0
+        ctest --build-nocmake -C Release -V
 
-    - name: Package SDK
+    - name: Run the install target
+      working-directory: ${{ steps.build_paths.outputs.BINARY }}
+
+      env:
+        CCACHE_DIR: ${{ steps.build_paths.outputs.SCCACHE }}
+        DESTDIR: ${{ steps.build_paths.outputs.PACKAGE_DATA }}
+
+      run: cmake --build . --target install -j 3
+
+    - name: Create the packages
+      working-directory: ${{ steps.build_paths.outputs.PACKAGE_BUILD }}
+      shell: cmd
+
+      run: |
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ steps.vc_arch.outputs.VC_ARCH }}
+        @echo on
+
+        7z ^
+          a windows_package_data.zip ^
+          ${{ steps.build_paths.outputs.PACKAGE_DATA }}
+
+        if %errorlevel% neq 0 exit /b %errorlevel%
+
+        if ${{ matrix.bitness }}==arm64 (
+           echo Do not create other packages for arm64
+           exit 0
+        )
+
+        cmake -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ^
+          -DCPACK_GENERATOR=WIX ^
+          -DOSQUERY_PACKAGE_VERSION=${{ steps.osquery_version.outputs.VALUE }} ^
+          -DOSQUERY_DATA_PATH=${{ steps.build_paths.outputs.PACKAGE_DATA }} ^
+          -DOSQUERY_BITNESS=${{ matrix.bitness }} ^
+          ${{ steps.build_paths.outputs.PACKAGING }}
+
+        if %errorlevel% neq 0 exit /b %errorlevel%
+
+        cmake --build . ^
+          --config Release ^
+          --target package
+
+        if %errorlevel% neq 0 exit /b %errorlevel%
+
+        cmake -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ^
+          -DCPACK_GENERATOR=NuGet ^
+          -DOSQUERY_PACKAGE_VERSION=${{ steps.osquery_version.outputs.VALUE }} ^
+          -DOSQUERY_DATA_PATH=${{ steps.build_paths.outputs.PACKAGE_DATA }} ^
+          -DOSQUERY_BITNESS=${{ matrix.bitness }} ^
+          ${{ steps.build_paths.outputs.PACKAGING }}
+
+        if %errorlevel% neq 0 exit /b %errorlevel%
+
+        cmake --build . ^
+          --config Release ^
+          --target package
+
+        if %errorlevel% neq 0 exit /b %errorlevel%
+
+    - name: Locate the packages
+      id: packages
       shell: powershell
       run: |
-        $sdkDir = "${{ steps.build_paths.outputs.BINARY }}\w\osquery-sdk"
-        $buildDir = "${{ steps.build_paths.outputs.BINARY }}"
-        New-Item -ItemType Directory -Force -Path "$sdkDir\lib\deps"
-        # Copy wrapper
-        Get-ChildItem -Path "$buildDir" -Filter "osquery_wrapper.lib" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\"
-        # Copy specs tables
-        Get-ChildItem -Path "$buildDir" -Filter "libcodegen_native_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
-        Get-ChildItem -Path "$buildDir" -Filter "libcodegen_foreign_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
-        # Copy ALL .lib files from osquery, plugins, libs, specs
-        Get-ChildItem -Path "$buildDir\osquery","$buildDir\plugins","$buildDir\libs","$buildDir\specs" -Filter "*.lib" -Recurse -ErrorAction SilentlyContinue | Copy-Item -Destination "$sdkDir\lib\" -ErrorAction SilentlyContinue
-        Compress-Archive -Path "$sdkDir" -DestinationPath "$buildDir\osquery-sdk-windows-x64.zip" -Force
-        Get-Item "$buildDir\osquery-sdk-windows-x64.zip"
+        echo "REL_UNSIGNED_RELEASE_PACKAGE_DATA_PATH=$((ls ${{ steps.build_paths.outputs.PACKAGE_BUILD }}\*.zip).FullName)" >> $env:GITHUB_OUTPUT
+        echo "REL_UNSIGNED_RELEASE_MSI_PATH=$((ls ${{ steps.build_paths.outputs.PACKAGE_BUILD }}\*.msi).FullName)" >> $env:GITHUB_OUTPUT
+        echo "REL_UNSIGNED_RELEASE_NUPKG_PATH=$((ls ${{ steps.build_paths.outputs.PACKAGE_BUILD }}\*.nupkg).FullName)" >> $env:GITHUB_OUTPUT
 
-    - name: Upload artifact
+    - name: Store the unsigned release package data artifact
       uses: actions/upload-artifact@v7
       with:
-        name: osquery-sdk-windows-x64
-        path: ${{ steps.build_paths.outputs.BINARY }}\osquery-sdk-windows-x64.zip
+        name: windows${{ matrix.bitness }}_unsigned_release_package_data
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_PACKAGE_DATA_PATH }}
 
-    - name: Save sccache
-      if: github.ref_name == github.event.repository.default_branch
-      uses: actions/cache/save@v6
+    - name: Store the unsigned release MSI artifact
+      if: matrix.bitness != 'arm64'
+      uses: actions/upload-artifact@v7
       with:
-        path: ${{ steps.build_paths.outputs.SCCACHE }}
-        key: sccache_${{ runner.os }}_wrapper_${{ github.sha }}
+        name: windows${{ matrix.bitness }}_unsigned_release_msi
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_MSI_PATH }}
 
-    - name: Save submodule cache
-      if: github.ref_name == github.event.repository.default_branch
+    - name: Store the unsigned release NUPKG artifact
+      if: matrix.bitness != 'arm64'
+      uses: actions/upload-artifact@v7
+      with:
+        name: windows${{ matrix.bitness }}_unsigned_release_nupkg
+        path: ${{ steps.packages.outputs.REL_UNSIGNED_RELEASE_NUPKG_PATH }}
+
+    # Before we terminate this job, delete the build folder. The cache
+    # actions will require the disk space to create the archives.
+    - name: Reclaim disk space
+      shell: powershell
+      run: rm -r -Force ${{ steps.build_paths.outputs.BINARY }}
+
+    - name: Save cache (git submodules)
+      if: github.ref_name == github.event.repository.default_branch && matrix.bitness == '64' && matrix.build_type == 'Release'
       uses: actions/cache/save@v6
       with:
         path: ${{ steps.build_paths.outputs.SOURCE }}\.git\modules
         key: gitmodules_${{ runner.os }}_${{ steps.submodule_hash.outputs.VALUE }}
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build_linux, build_macos, build_windows]
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
+    - name: Save cache (sccache)
+      if: github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.build_paths.outputs.SCCACHE }}
+        key: sccache_${{ matrix.os }}_${{ matrix.bitness }}_${{ matrix.build_type }}_${{ github.sha }}
 
+  # This job is here as a github status check -- it allows us to move the dependency from
+  # being on all the jobs to this single one.
+  mergeable:
+    runs-on: ubuntu-latest
     steps:
-    - name: Download all artifacts
-      uses: actions/download-artifact@v8
-      with:
-        path: artifacts
-
-    - name: Prepare release assets
-      run: |
-        mkdir -p release
-        cp artifacts/osquery-sdk-linux-x86_64/*.tar.gz release/
-        cp artifacts/osquery-sdk-macos-arm64/*.tar.gz release/
-        cp artifacts/osquery-sdk-windows-x64/*.zip release/
-        cd release && sha256sum * > checksums.txt
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: release/*
-        generate_release_notes: true
+      - run: true
+    needs:
+      - build_macos
+      - build_linux
+      - build_windows
+      - build_universal_macos_artifacts
+      - check_source_code
