@@ -2784,6 +2784,7 @@ osquery/wrapper/CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o: osquery/wrapper/CM
   /usr/local/osquery-toolchain/usr/include/bits/sigset.h \
   /usr/local/osquery-toolchain/usr/include/bits/sigstack.h \
   /usr/local/osquery-toolchain/usr/include/bits/sigthread.h \
+  /usr/local/osquery-toolchain/usr/include/bits/stat.h \
   /usr/local/osquery-toolchain/usr/include/bits/stdio_lim.h \
   /usr/local/osquery-toolchain/usr/include/bits/stdlib-float.h \
   /usr/local/osquery-toolchain/usr/include/bits/sys_errlist.h \
@@ -2821,6 +2822,7 @@ osquery/wrapper/CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o: osquery/wrapper/CM
   /usr/local/osquery-toolchain/usr/include/string.h \
   /usr/local/osquery-toolchain/usr/include/sys/cdefs.h \
   /usr/local/osquery-toolchain/usr/include/sys/select.h \
+  /usr/local/osquery-toolchain/usr/include/sys/stat.h \
   /usr/local/osquery-toolchain/usr/include/sys/sysmacros.h \
   /usr/local/osquery-toolchain/usr/include/sys/time.h \
   /usr/local/osquery-toolchain/usr/include/sys/types.h \
@@ -2855,6 +2857,8 @@ osquery/wrapper/CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o: osquery/wrapper/CM
 /usr/local/osquery-toolchain/usr/include/sys/time.h:
 
 /usr/local/osquery-toolchain/usr/include/signal.h:
+
+/usr/local/osquery-toolchain/usr/include/bits/stat.h:
 
 /usr/local/osquery-toolchain/usr/include/bits/sigstack.h:
 
@@ -5405,6 +5409,8 @@ libraries/cmake/source/boost/src/libs/config/include/boost/config/abi_suffix.hpp
 /usr/local/osquery-toolchain/usr/include/c++/v1/__algorithm/ranges_transform.h:
 
 /usr/local/osquery-toolchain/usr/include/c++/v1/__tuple/tuple_like.h:
+
+/usr/local/osquery-toolchain/usr/include/sys/stat.h:
 
 /usr/local/osquery-toolchain/usr/include/c++/v1/__type_traits/is_move_assignable.h:
 

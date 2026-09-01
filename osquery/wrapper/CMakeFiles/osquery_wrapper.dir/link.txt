@@ -1,2 +1,2 @@
-/usr/bin/ar qc libosquery_wrapper.a CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o
-/usr/bin/ranlib libosquery_wrapper.a
+/usr/local/osquery-toolchain/usr/bin/llvm-ar qc libosquery_wrapper.a CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o
+/usr/local/osquery-toolchain/usr/bin/llvm-ranlib libosquery_wrapper.a

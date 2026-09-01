@@ -2786,6 +2786,7 @@ osquery/wrapper/CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o
  /usr/local/osquery-toolchain/usr/include/bits/sigset.h
  /usr/local/osquery-toolchain/usr/include/bits/sigstack.h
  /usr/local/osquery-toolchain/usr/include/bits/sigthread.h
+ /usr/local/osquery-toolchain/usr/include/bits/stat.h
  /usr/local/osquery-toolchain/usr/include/bits/stdio_lim.h
  /usr/local/osquery-toolchain/usr/include/bits/stdlib-float.h
  /usr/local/osquery-toolchain/usr/include/bits/sys_errlist.h
@@ -2823,6 +2824,7 @@ osquery/wrapper/CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o
  /usr/local/osquery-toolchain/usr/include/string.h
  /usr/local/osquery-toolchain/usr/include/sys/cdefs.h
  /usr/local/osquery-toolchain/usr/include/sys/select.h
+ /usr/local/osquery-toolchain/usr/include/sys/stat.h
  /usr/local/osquery-toolchain/usr/include/sys/sysmacros.h
  /usr/local/osquery-toolchain/usr/include/sys/time.h
  /usr/local/osquery-toolchain/usr/include/sys/types.h

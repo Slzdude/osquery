@@ -1967,4 +1967,6 @@ osquery/wrapper/CMakeFiles/osquery_wrapper.dir/wrapper.cpp.o: \
   /home/work/projects/GhostTrace/external/osquery/ns_osquery_core_sql/osquery/core/sql/table_row.h \
   /home/work/projects/GhostTrace/external/osquery/ns_osquery_core_sql/osquery/core/sql/column.h \
   /home/work/projects/GhostTrace/external/osquery/ns_osquery_registry/osquery/registry/registry_factory.h \
-  /home/work/projects/GhostTrace/external/osquery/ns_osquery_registry/osquery/registry/registry_interface.h
+  /home/work/projects/GhostTrace/external/osquery/ns_osquery_registry/osquery/registry/registry_interface.h \
+  /usr/local/osquery-toolchain/usr/include/sys/stat.h \
+  /usr/local/osquery-toolchain/usr/include/bits/stat.h
