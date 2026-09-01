@@ -118,6 +118,7 @@ jobs:
       run: |
         SDK=/tmp/osquery-sdk
         BUILD=${{ steps.build_paths.outputs.BINARY }}
+        mkdir -p $SDK/lib $SDK/lib/deps
         # Copy wrapper
         cp $BUILD/osquery/wrapper/libosquery_wrapper.a $SDK/lib/
         # Copy specs tables
@@ -270,6 +271,7 @@ jobs:
       run: |
         SDK=/tmp/osquery-sdk
         BUILD=${{ steps.build_paths.outputs.BINARY }}
+        mkdir -p $SDK/lib $SDK/lib/deps
         cp $BUILD/osquery/wrapper/libosquery_wrapper.a $SDK/lib/
         mkdir -p $SDK/lib/deps
         cp $BUILD/specs/libcodegen_native_tables.a $SDK/lib/deps/
