@@ -114,9 +114,6 @@ jobs:
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       run: cmake --install . --prefix /tmp/osquery-sdk 2>/dev/null || true
 
-    - name: Compile glibc compat stub
-      run: gcc -c -o /tmp/glibc_compat.o ${{ steps.build_paths.outputs.SOURCE }}/osquery/wrapper/glibc_compat.c
-
     - name: Package SDK
       run: |
         SDK=/tmp/osquery-sdk
