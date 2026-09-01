@@ -197,29 +197,31 @@ void osquery_shutdown() {
   }
 }
 
-// ── glibc 兼容层 ──────────────────────────────────────────
+// ── glibc 兼容层（仅 Linux）──────────────────────────────
 // 提供旧版 glibc 中存在但新版已移除的函数
 
+#if defined(__linux__) && !defined(__ANDROID__)
 #include <errno.h>
 #include <sys/stat.h>
 
 // glibc 2.34+ 移除了 __secure_getenv
-char *__secure_getenv(const char *name) {
+extern "C" char *__secure_getenv(const char *name) {
     return getenv(name);
 }
 
 // glibc 2.30+ 移除了 sysctl
-int sysctl(int *name, int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+extern "C" int sysctl(int *name, int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     (void)name; (void)namelen; (void)oldp; (void)oldlenp; (void)newp; (void)newlen;
     errno = ENOSYS;
     return -1;
 }
 
 // libudev 内部函数存根
-int util_create_path(const char *path) {
+extern "C" int util_create_path(const char *path) {
     struct stat st;
     if (stat(path, &st) == 0) return 0;
     return mkdir(path, 0755);
 }
+#endif // __linux__
 
 } // extern "C"
