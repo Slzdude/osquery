@@ -119,20 +119,47 @@ jobs:
 
     - name: Package SDK
       run: |
-        # Copy wrapper .a
-        cp ${{ steps.build_paths.outputs.BINARY }}/osquery/wrapper/libosquery_wrapper.a /tmp/osquery-sdk/lib/
-        # Copy specs tables to deps/
-        mkdir -p /tmp/osquery-sdk/lib/deps
-        cp ${{ steps.build_paths.outputs.BINARY }}/specs/libcodegen_native_tables.a /tmp/osquery-sdk/lib/deps/
-        cp ${{ steps.build_paths.outputs.BINARY }}/specs/libcodegen_foreign_tables.a /tmp/osquery-sdk/lib/deps/
-        # Copy glibc compat stub
-        cp /tmp/glibc_compat.o /tmp/osquery-sdk/lib/
-        # Copy all dependency .a files
-        find ${{ steps.build_paths.outputs.BINARY }}/osquery/ -name "*.a" -type f -exec cp {} /tmp/osquery-sdk/lib/ \; 2>/dev/null
-        find ${{ steps.build_paths.outputs.BINARY }}/plugins/ -name "*.a" -type f -exec cp {} /tmp/osquery-sdk/lib/ \; 2>/dev/null
+        SDK=/tmp/osquery-sdk
+        BUILD=${{ steps.build_paths.outputs.BINARY }}
+        # Copy wrapper
+        cp $BUILD/osquery/wrapper/libosquery_wrapper.a $SDK/lib/
+        # Copy specs tables
+        mkdir -p $SDK/lib/deps
+        cp $BUILD/specs/libcodegen_native_tables.a $SDK/lib/deps/
+        cp $BUILD/specs/libcodegen_foreign_tables.a $SDK/lib/deps/
+        # Copy ALL .a files from build
+        find $BUILD/osquery/ $BUILD/plugins/ $BUILD/libs/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
+        find $BUILD/installed_formulas/ $BUILD/openssl/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
         # Strip
-        find /tmp/osquery-sdk/lib -name "*.a" -exec strip --strip-debug {} \; 2>/dev/null
-        # Create tarball
+        find $SDK/lib -name "*.a" -exec strip --strip-debug {} \; 2>/dev/null
+        # Generate pkg-config
+        SPECS="$SDK/lib/deps/libcodegen_native_tables.a $SDK/lib/deps/libcodegen_foreign_tables.a"
+        DEPS=""
+        for f in $SDK/lib/libosquery_*.a $SDK/lib/libplugins_*.a $SDK/lib/libthirdparty_*.a; do
+          [ -f "$f" ] && DEPS="$DEPS $f"
+        done
+        for f in $SDK/lib/libssl.a $SDK/lib/libcrypto.a; do
+          [ -f "$f" ] && DEPS="$DEPS $f"
+        done
+        CXX_LIBS="/usr/local/osquery-toolchain/usr/lib/libc++.a /usr/local/osquery-toolchain/usr/lib/libc++abi.a"
+        mkdir -p $SDK/lib/pkgconfig
+        cat > $SDK/lib/pkgconfig/osquery_wrapper.pc << 'PCEOF'
+        prefix=SDK_PATH
+        exec_prefix=${prefix}
+        libdir=${prefix}/lib
+        includedir=${prefix}/include
+        Name: osquery_wrapper
+        Description: osquery SQL engine C wrapper
+        Version: 5.12.0
+        Requires:
+        Libs: -L${libdir} -Wl,--whole-archive SPECS_PLACEHOLDER -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group -losquery_wrapper DEPS_PLACEHOLDER CXX_PLACEHOLDER -lm -lpthread -ldl -lresolv -lrt -Wl,--end-group
+        Cflags: -I${includedir}
+        PCEOF
+        sed -i "s|SDK_PATH|$SDK|g" $SDK/lib/pkgconfig/osquery_wrapper.pc
+        sed -i "s|SPECS_PLACEHOLDER|$SPECS|g" $SDK/lib/pkgconfig/osquery_wrapper.pc
+        sed -i "s|DEPS_PLACEHOLDER|$DEPS|g" $SDK/lib/pkgconfig/osquery_wrapper.pc
+        sed -i "s|CXX_PLACEHOLDER|$CXX_LIBS|g" $SDK/lib/pkgconfig/osquery_wrapper.pc
+        # Package
         cd /tmp && tar czf osquery-sdk-linux-x86_64.tar.gz osquery-sdk/
         ls -lh /tmp/osquery-sdk-linux-x86_64.tar.gz
 
@@ -244,13 +271,34 @@ jobs:
 
     - name: Package SDK
       run: |
-        cp ${{ steps.build_paths.outputs.BINARY }}/osquery/wrapper/libosquery_wrapper.a /tmp/osquery-sdk/lib/
-        mkdir -p /tmp/osquery-sdk/lib/deps
-        cp ${{ steps.build_paths.outputs.BINARY }}/specs/libcodegen_native_tables.a /tmp/osquery-sdk/lib/deps/
-        cp ${{ steps.build_paths.outputs.BINARY }}/specs/libcodegen_foreign_tables.a /tmp/osquery-sdk/lib/deps/
-        find ${{ steps.build_paths.outputs.BINARY }}/osquery/ -name "*.a" -type f -exec cp {} /tmp/osquery-sdk/lib/ \; 2>/dev/null
-        find ${{ steps.build_paths.outputs.BINARY }}/plugins/ -name "*.a" -type f -exec cp {} /tmp/osquery-sdk/lib/ \; 2>/dev/null
-        find /tmp/osquery-sdk/lib -name "*.a" -exec strip -x {} \; 2>/dev/null
+        SDK=/tmp/osquery-sdk
+        BUILD=${{ steps.build_paths.outputs.BINARY }}
+        cp $BUILD/osquery/wrapper/libosquery_wrapper.a $SDK/lib/
+        mkdir -p $SDK/lib/deps
+        cp $BUILD/specs/libcodegen_native_tables.a $SDK/lib/deps/
+        cp $BUILD/specs/libcodegen_foreign_tables.a $SDK/lib/deps/
+        find $BUILD/osquery/ $BUILD/plugins/ $BUILD/libs/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
+        find $BUILD/installed_formulas/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
+        find $SDK/lib -name "*.a" -exec strip -x {} \; 2>/dev/null
+        # Generate pkg-config
+        SPECS="$SDK/lib/deps/libcodegen_native_tables.a $SDK/lib/deps/libcodegen_foreign_tables.a"
+        DEPS=""
+        for f in $SDK/lib/libosquery_*.a $SDK/lib/libplugins_*.a $SDK/lib/libthirdparty_*.a; do
+          [ -f "$f" ] && DEPS="$DEPS $f"
+        done
+        mkdir -p $SDK/lib/pkgconfig
+        cat > $SDK/lib/pkgconfig/osquery_wrapper.pc << PCEOF
+        prefix=$SDK
+        exec_prefix=\${prefix}
+        libdir=\${prefix}/lib
+        includedir=\${prefix}/include
+        Name: osquery_wrapper
+        Description: osquery SQL engine C wrapper
+        Version: 5.12.0
+        Requires:
+        Libs: -L\${libdir} -Wl,--whole-archive $SPECS -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group -losquery_wrapper $DEPS -lc++ -lc++abi -lm -lpthread -ldl -lresolv -lrt -Wl,--end-group
+        Cflags: -I\${includedir}
+        PCEOF
         cd /tmp && tar czf osquery-sdk-macos-arm64.tar.gz osquery-sdk/
         ls -lh /tmp/osquery-sdk-macos-arm64.tar.gz
 
@@ -420,14 +468,13 @@ jobs:
         $sdkDir = "${{ steps.build_paths.outputs.BINARY }}\w\osquery-sdk"
         $buildDir = "${{ steps.build_paths.outputs.BINARY }}"
         New-Item -ItemType Directory -Force -Path "$sdkDir\lib\deps"
-        # Find and copy wrapper .lib
+        # Copy wrapper
         Get-ChildItem -Path "$buildDir" -Filter "osquery_wrapper.lib" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\"
-        # Find and copy specs tables
+        # Copy specs tables
         Get-ChildItem -Path "$buildDir" -Filter "libcodegen_native_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
         Get-ChildItem -Path "$buildDir" -Filter "libcodegen_foreign_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
-        # Copy all osquery and plugin .lib files
-        Get-ChildItem -Path "$buildDir\osquery" -Filter "*.lib" -Recurse | Copy-Item -Destination "$sdkDir\lib\"
-        Get-ChildItem -Path "$buildDir\plugins" -Filter "*.lib" -Recurse | Copy-Item -Destination "$sdkDir\lib\"
+        # Copy ALL .lib files from osquery, plugins, libs, specs
+        Get-ChildItem -Path "$buildDir\osquery","$buildDir\plugins","$buildDir\libs","$buildDir\specs" -Filter "*.lib" -Recurse -ErrorAction SilentlyContinue | Copy-Item -Destination "$sdkDir\lib\" -ErrorAction SilentlyContinue
         Compress-Archive -Path "$sdkDir" -DestinationPath "$buildDir\osquery-sdk-windows-x64.zip" -Force
         Get-Item "$buildDir\osquery-sdk-windows-x64.zip"
 

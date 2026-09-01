@@ -1,8 +1,5 @@
 # osquery C wrapper for GhostTrace
-# 编译为静态库，通过 cmake install 生成完整 SDK 包
-#
-# 依赖列表需要手动维护（cmake 无法自动遍历传递依赖）。
-# 新增依赖时在此处添加即可。
+# 编译为静态库，通过 cmake install 生成完整 SDK 包 + pkg-config
 
 include(GNUInstallDirs)
 
@@ -30,9 +27,9 @@ target_link_libraries(osquery_wrapper PUBLIC
   thirdparty_boost
 )
 
-# ── 需要安装到 SDK 的所有静态库 ─────────────────────────────
+# ── 安装目标列表 ──────────────────────────────────────────
 
-# osquery 核心 + 表 + 工具
+# osquery 核心库
 set(_OSQUERY_LIBS
   osquery_core osquery_core_init osquery_core_plugins osquery_core_sql
   osquery_sql osquery_database osquery_database_ephemeral
@@ -62,19 +59,44 @@ set(_PLUGIN_LIBS
   plugins_remote_enroll_tlsenroll
 )
 
-# 第三方库
-set(_THIRDPARTY_LIBS
+# 第三方库（跨平台）
+set(_THIRDPARTY_CROSS
   thirdparty_boost thirdparty_openssl thirdparty_gflags thirdparty_glog
   thirdparty_sqlite thirdparty_zlib thirdparty_zstd thirdparty_bzip2 thirdparty_lz4 thirdparty_lzma
   thirdparty_libarchive thirdparty_thrift thirdparty_yara
+  thirdparty_sleuthkit_auto thirdparty_sleuthkit_base thirdparty_sleuthkit_fs
+  thirdparty_sleuthkit_fs_cpp thirdparty_sleuthkit_hashdb
+  thirdparty_sleuthkit_img thirdparty_sleuthkit_pool
+  thirdparty_sleuthkit_util thirdparty_sleuthkit_vs
+  thirdparty_linenoise-ng
 )
+
+# Linux-only 第三方库
+set(_THIRDPARTY_LINUX "")
+if(DEFINED PLATFORM_LINUX)
+  set(_THIRDPARTY_LINUX
+    thirdparty_util-linux thirdparty_libcap thirdparty_libaudit
+    thirdparty_libudev thirdparty_dbus
+    thirdparty_libmagic thirdparty_augeas
+    thirdparty_libdpkg_dpkg thirdparty_libdpkg_compat
+    thirdparty_libgcrypt thirdparty_libgpg-error
+    thirdparty_libcryptsetup thirdparty_libdevmapper
+    thirdparty_libiptc
+    thirdparty_librpm thirdparty_popt
+    thirdparty_gnulib_library
+  )
+endif()
+
+set(_ALL_THIRDPARTY ${_THIRDPARTY_CROSS} ${_THIRDPARTY_LINUX})
 
 # ── 安装规则 ────────────────────────────────────────────────
 
+# wrapper + header
 install(TARGETS osquery_wrapper ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(FILES wrapper.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_THIRDPARTY_LIBS})
+# osquery + plugin 库
+foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS})
   if(TARGET ${dep})
     get_target_property(dep_type ${dep} TYPE)
     if(dep_type STREQUAL "STATIC_LIBRARY")
@@ -82,6 +104,26 @@ foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_THIRDPARTY_LIBS})
     endif()
   endif()
 endforeach()
+
+# 第三方库（从构建目录安装）
+foreach(dep ${_ALL_THIRDPARTY})
+  if(TARGET ${dep})
+    get_target_property(dep_type ${dep} TYPE)
+    if(dep_type STREQUAL "STATIC_LIBRARY")
+      install(FILES "$<TARGET_FILE:${dep}>" DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    endif()
+  endif()
+endforeach()
+
+# gnulib（augeas 依赖，不在标准 target 中）
+if(DEFINED PLATFORM_LINUX)
+  install(CODE "
+    set(_gnulib \"${CMAKE_BINARY_DIR}/libs/src/augeas/gnulib/libthirdparty_gnulib_library.a\")
+    if(EXISTS \"\${_gnulib}\")
+      file(INSTALL \"\${_gnulib}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+    endif()
+  ")
+endif()
 
 # specs 表库
 install(CODE "
@@ -96,13 +138,12 @@ install(CODE "
 
 # 补充第三方库（cmake install 可能遗漏的）
 install(CODE "
-  file(GLOB _extra_libs
-    \"${CMAKE_BINARY_DIR}/libs/src/*/*.a\"
-    \"${CMAKE_BINARY_DIR}/installed_formulas/*/lib64/*.a\"
-    \"${CMAKE_BINARY_DIR}/installed_formulas/*/lib/*.a\"
-    \"${CMAKE_BINARY_DIR}/openssl/openssl-prefix/src/openssl/lib*.a\"
-  )
-  foreach(lib \${_extra_libs})
+  # 递归搜索所有 .a 文件
+  file(GLOB_RECURSE _extra_libs \"${CMAKE_BINARY_DIR}/libs/src/*.a\")
+  file(GLOB _openssl_libs \"${CMAKE_BINARY_DIR}/openssl/openssl-prefix/src/openssl/lib*.a\")
+  file(GLOB _formula_libs \"${CMAKE_BINARY_DIR}/installed_formulas/*/lib64/*.a\" \"${CMAKE_BINARY_DIR}/installed_formulas/*/lib/*.a\")
+
+  foreach(lib \${_extra_libs} \${_openssl_libs} \${_formula_libs})
     if(EXISTS \"\${lib}\")
       get_filename_component(_name \"\${lib}\" NAME)
       set(_dest \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/\${_name}\")
@@ -113,23 +154,12 @@ install(CODE "
   endforeach()
 ")
 
-# ── pkg-config ──────────────────────────────────────────────
+# ── pkg-config（install 时生成，避免 configure 时文件不存在）──
 
 # specs 表路径
 set(_SPECS "")
 foreach(tgt codegen_native_tables codegen_foreign_tables)
   set(_SPECS "${_SPECS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/deps/lib${tgt}.a")
-endforeach()
-
-# 所有依赖库路径
-set(_DEPS "")
-foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_THIRDPARTY_LIBS})
-  if(TARGET ${dep})
-    get_target_property(dep_type ${dep} TYPE)
-    if(dep_type STREQUAL "STATIC_LIBRARY")
-      set(_DEPS "${_DEPS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${dep}.a")
-    endif()
-  endif()
 endforeach()
 
 # C++ 运行时
@@ -140,15 +170,56 @@ elseif(DEFINED PLATFORM_MACOS)
   set(_CXX "-lc++ -lc++abi")
 endif()
 
-# 构建 Libs 行（单个 set 调用，-Wl, 标志不会被 cmake 转义）
-set(LIBS_LINE "-L\${libdir} -Wl,--whole-archive ${_SPECS} -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group -losquery_wrapper ${_DEPS} ${_CXX} -lm -lpthread -ldl -lresolv -lrt -Wl,--end-group")
+# osquery + plugin 库路径
+set(_DEPS "")
+foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS})
+  if(TARGET ${dep})
+    get_target_property(dep_type ${dep} TYPE)
+    if(dep_type STREQUAL "STATIC_LIBRARY")
+      set(_DEPS "${_DEPS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${dep}.a")
+    endif()
+  endif()
+endforeach()
 
-configure_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/osquery_wrapper.pc.in"
-  "${CMAKE_CURRENT_BINARY_DIR}/osquery_wrapper.pc"
-  @ONLY
-)
+# 在 install 时扫描已安装的第三方库并生成 .pc
+install(CODE "
+  # osquery + plugin 库
+  set(_pc_deps \"${_DEPS}\")
 
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/osquery_wrapper.pc"
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
-)
+  # 扫描已安装的第三方库
+  file(GLOB _installed_tp \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libthirdparty_*.a\")
+  foreach(lib \${_installed_tp})
+    set(_pc_deps \"\${_pc_deps} \${lib}\")
+  endforeach()
+
+  # OpenSSL
+  foreach(lib libssl.a libcrypto.a)
+    set(_p \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/\${lib}\")
+    if(EXISTS \"\${_p}\")
+      set(_pc_deps \"\${_pc_deps} \${_p}\")
+    endif()
+  endforeach()
+
+  # 系统库
+  set(_pc_deps \"\${_pc_deps} -lm -lpthread -ldl -lresolv -lrt\")
+
+  # 构建 Libs 行
+  string(STRIP \"\${_pc_deps}\" _pc_deps)
+  set(_libs_line \"-L\\\${libdir} -Wl,--whole-archive ${_SPECS} -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group -losquery_wrapper \${_pc_deps} ${_CXX} -Wl,--end-group\")
+
+  # 写入 .pc 文件
+  file(MAKE_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pkgconfig\")
+  file(WRITE \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pkgconfig/osquery_wrapper.pc\"
+\"prefix=${CMAKE_INSTALL_PREFIX}
+exec_prefix=\\\${prefix}
+libdir=\\\${prefix}/${CMAKE_INSTALL_LIBDIR}
+includedir=\\\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}
+
+Name: osquery_wrapper
+Description: osquery SQL engine C wrapper for GhostTrace
+Version: ${OSQUERY_VERSION}
+Requires:
+Libs: \${_libs_line}
+Cflags: -I\\\${includedir}
+\")
+")
