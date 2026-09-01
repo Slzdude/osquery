@@ -113,42 +113,36 @@ install(CODE "
   endforeach()
 ")
 
-# ── pkg-config（configure_file @ONLY）───────────────────────
+# ── pkg-config ──────────────────────────────────────────────
 
-# specs 表路径（空格分隔字符串，不是分号列表）
-set(SPECS_LIBS "")
+# specs 表路径
+set(_SPECS "")
 foreach(tgt codegen_native_tables codegen_foreign_tables)
-  set(SPECS_LIBS "${SPECS_LIBS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/deps/lib${tgt}.a")
+  set(_SPECS "${_SPECS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/deps/lib${tgt}.a")
 endforeach()
-string(STRIP "${SPECS_LIBS}" SPECS_LIBS)
 
-# 所有依赖库路径（空格分隔）
-set(DEPS_LIBS "")
+# 所有依赖库路径
+set(_DEPS "")
 foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_THIRDPARTY_LIBS})
   if(TARGET ${dep})
     get_target_property(dep_type ${dep} TYPE)
     if(dep_type STREQUAL "STATIC_LIBRARY")
-      set(DEPS_LIBS "${DEPS_LIBS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${dep}.a")
+      set(_DEPS "${_DEPS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${dep}.a")
     endif()
   endif()
 endforeach()
 
 # C++ 运行时
+set(_CXX "")
 if(OSQUERY_TOOLCHAIN_SYSROOT)
-  set(CXX_RUNTIME "${OSQUERY_TOOLCHAIN_SYSROOT}/usr/lib/libc++.a ${OSQUERY_TOOLCHAIN_SYSROOT}/usr/lib/libc++abi.a")
+  set(_CXX "${OSQUERY_TOOLCHAIN_SYSROOT}/usr/lib/libc++.a ${OSQUERY_TOOLCHAIN_SYSROOT}/usr/lib/libc++abi.a")
 elseif(DEFINED PLATFORM_MACOS)
-  set(CXX_RUNTIME "-lc++ -lc++abi")
-else()
-  set(CXX_RUNTIME "")
+  set(_CXX "-lc++ -lc++abi")
 endif()
 
-# 系统库
-set(SYS_LIBS "-lm -lpthread -ldl -lresolv -lrt")
+# 构建 Libs 行（单个 set 调用，-Wl, 标志不会被 cmake 转义）
+set(LIBS_LINE "-L\${libdir} -Wl,--whole-archive ${_SPECS} -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group -losquery_wrapper ${_DEPS} ${_CXX} -lm -lpthread -ldl -lresolv -lrt -Wl,--end-group")
 
-# 兼容层（嵌入 wrapper.cpp，留空）
-set(COMPAT_STUB "")
-
-# 使用 @ONLY 保护 shell 变量 ${prefix} 等不被 cmake 替换
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/osquery_wrapper.pc.in"
   "${CMAKE_CURRENT_BINARY_DIR}/osquery_wrapper.pc"
