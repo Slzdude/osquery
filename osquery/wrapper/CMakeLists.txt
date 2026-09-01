@@ -31,7 +31,6 @@ target_link_libraries(osquery_wrapper PUBLIC
 )
 
 # ── 需要安装到 SDK 的所有静态库 ─────────────────────────────
-# 按类别组织，便于维护
 
 # osquery 核心 + 表 + 工具
 set(_OSQUERY_LIBS
@@ -63,7 +62,7 @@ set(_PLUGIN_LIBS
   plugins_remote_enroll_tlsenroll
 )
 
-# 第三方库（名称可能因平台而异，用 GLOB 补充）
+# 第三方库
 set(_THIRDPARTY_LIBS
   thirdparty_boost thirdparty_openssl thirdparty_gflags thirdparty_glog
   thirdparty_sqlite thirdparty_zlib thirdparty_zstd thirdparty_bzip2 thirdparty_lz4 thirdparty_lzma
@@ -72,11 +71,9 @@ set(_THIRDPARTY_LIBS
 
 # ── 安装规则 ────────────────────────────────────────────────
 
-# wrapper + header
 install(TARGETS osquery_wrapper ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(FILES wrapper.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-# 安装所有静态库
 foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_THIRDPARTY_LIBS})
   if(TARGET ${dep})
     get_target_property(dep_type ${dep} TYPE)
@@ -86,7 +83,7 @@ foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_THIRDPARTY_LIBS})
   endif()
 endforeach()
 
-# specs 表库（需要 --whole-archive）
+# specs 表库
 install(CODE "
   file(MAKE_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/deps\")
   foreach(tgt codegen_native_tables codegen_foreign_tables)
@@ -97,7 +94,7 @@ install(CODE "
   endforeach()
 ")
 
-# 补充安装构建目录中的第三方库（cmake install 可能遗漏的）
+# 补充第三方库（cmake install 可能遗漏的）
 install(CODE "
   file(GLOB _extra_libs
     \"${CMAKE_BINARY_DIR}/libs/src/*/*.a\"
@@ -116,39 +113,42 @@ install(CODE "
   endforeach()
 ")
 
-# ── pkg-config ──────────────────────────────────────────────
+# ── pkg-config（configure_file @ONLY）───────────────────────
 
-# 收集 specs 表路径
-set(_SPECS_LIBS "")
+# specs 表路径（空格分隔字符串，不是分号列表）
+set(SPECS_LIBS "")
 foreach(tgt codegen_native_tables codegen_foreign_tables)
-  list(APPEND _SPECS_LIBS "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/deps/lib${tgt}.a")
+  set(SPECS_LIBS "${SPECS_LIBS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/deps/lib${tgt}.a")
 endforeach()
-string(REPLACE ";" " " SPECS_LIBS "${_SPECS_LIBS}")
+string(STRIP "${SPECS_LIBS}" SPECS_LIBS)
 
-# 收集所有依赖库路径
-set(_DEPS "")
+# 所有依赖库路径（空格分隔）
+set(DEPS_LIBS "")
 foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_THIRDPARTY_LIBS})
   if(TARGET ${dep})
     get_target_property(dep_type ${dep} TYPE)
     if(dep_type STREQUAL "STATIC_LIBRARY")
-      list(APPEND _DEPS "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${dep}.a")
+      set(DEPS_LIBS "${DEPS_LIBS} ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${dep}.a")
     endif()
   endif()
 endforeach()
-list(APPEND _DEPS "-lm -lpthread -ldl -lresolv -lrt")
-string(REPLACE ";" " " DEPS_LIBS "${_DEPS}")
 
-# C++ 运行时（osquery 用 libc++ 编译）
+# C++ 运行时
 if(OSQUERY_TOOLCHAIN_SYSROOT)
   set(CXX_RUNTIME "${OSQUERY_TOOLCHAIN_SYSROOT}/usr/lib/libc++.a ${OSQUERY_TOOLCHAIN_SYSROOT}/usr/lib/libc++abi.a")
 elseif(DEFINED PLATFORM_MACOS)
   set(CXX_RUNTIME "-lc++ -lc++abi")
-elseif(DEFINED PLATFORM_WINDOWS)
+else()
   set(CXX_RUNTIME "")
 endif()
 
+# 系统库
+set(SYS_LIBS "-lm -lpthread -ldl -lresolv -lrt")
+
+# 兼容层（嵌入 wrapper.cpp，留空）
 set(COMPAT_STUB "")
 
+# 使用 @ONLY 保护 shell 变量 ${prefix} 等不被 cmake 替换
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/osquery_wrapper.pc.in"
   "${CMAKE_CURRENT_BINARY_DIR}/osquery_wrapper.pc"

@@ -3,9 +3,9 @@ exec_prefix=${prefix}
 libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
 includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 
-Name: @PROJECT_NAME@
+Name: osquery_wrapper
 Description: osquery SQL engine C wrapper for GhostTrace
 Version: @OSQUERY_VERSION@
 Requires:
-Libs: -L${libdir} -losquery_wrapper @SPECS_LIBS@ @DEPS_LIBS@ @COMPAT_STUB@ @CXX_RUNTIME@
+Libs: -L${libdir} -Wl,--whole-archive @SPECS_LIBS@ -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group -losquery_wrapper @DEPS_LIBS@ @CXX_RUNTIME@ @SYS_LIBS@ -Wl,--end-group
 Cflags: -I${includedir}
