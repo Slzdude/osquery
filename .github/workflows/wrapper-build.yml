@@ -125,9 +125,11 @@ jobs:
         mkdir -p $SDK/lib/deps
         cp $BUILD/specs/libcodegen_native_tables.a $SDK/lib/deps/
         cp $BUILD/specs/libcodegen_foreign_tables.a $SDK/lib/deps/
-        # Copy ALL .a files from build
-        find $BUILD/osquery/ $BUILD/plugins/ $BUILD/libs/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
-        find $BUILD/installed_formulas/ $BUILD/openssl/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
+        # Copy .a files from build (exclude rocksdb and rdkafka to reduce size)
+        find $BUILD/osquery/ $BUILD/plugins/ $BUILD/libs/ -name "*.a" -type f \
+          ! -name "*rocksdb*" ! -name "*rdkafka*" -exec cp {} $SDK/lib/ \; 2>/dev/null
+        find $BUILD/installed_formulas/ $BUILD/openssl/ -name "*.a" -type f \
+          ! -name "*rocksdb*" ! -name "*rdkafka*" -exec cp {} $SDK/lib/ \; 2>/dev/null
         # Strip
         find $SDK/lib -name "*.a" -exec strip --strip-debug {} \; 2>/dev/null
         # Generate pkg-config
@@ -276,8 +278,10 @@ jobs:
         mkdir -p $SDK/lib/deps
         cp $BUILD/specs/libcodegen_native_tables.a $SDK/lib/deps/
         cp $BUILD/specs/libcodegen_foreign_tables.a $SDK/lib/deps/
-        find $BUILD/osquery/ $BUILD/plugins/ $BUILD/libs/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
-        find $BUILD/installed_formulas/ -name "*.a" -type f -exec cp {} $SDK/lib/ \; 2>/dev/null
+        find $BUILD/osquery/ $BUILD/plugins/ $BUILD/libs/ -name "*.a" -type f \
+          ! -name "*rocksdb*" ! -name "*rdkafka*" -exec cp {} $SDK/lib/ \; 2>/dev/null
+        find $BUILD/installed_formulas/ -name "*.a" -type f \
+          ! -name "*rocksdb*" ! -name "*rdkafka*" -exec cp {} $SDK/lib/ \; 2>/dev/null
         find $SDK/lib -name "*.a" -exec strip -x {} \; 2>/dev/null
         # Generate pkg-config
         SPECS="$SDK/lib/deps/libcodegen_native_tables.a $SDK/lib/deps/libcodegen_foreign_tables.a"
@@ -477,8 +481,8 @@ jobs:
         # Copy specs tables
         Get-ChildItem -Path "$buildDir" -Filter "libcodegen_native_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
         Get-ChildItem -Path "$buildDir" -Filter "libcodegen_foreign_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
-        # Copy ALL .lib files from osquery, plugins, libs, specs
-        Get-ChildItem -Path "$buildDir\osquery","$buildDir\plugins","$buildDir\libs","$buildDir\specs" -Filter "*.lib" -Recurse -ErrorAction SilentlyContinue | Copy-Item -Destination "$sdkDir\lib\" -ErrorAction SilentlyContinue
+        # Copy .lib files from osquery, plugins, libs, specs (exclude rocksdb and rdkafka)
+        Get-ChildItem -Path "$buildDir\osquery","$buildDir\plugins","$buildDir\libs","$buildDir\specs" -Filter "*.lib" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "rocksdb|rdkafka" } | Copy-Item -Destination "$sdkDir\lib\" -ErrorAction SilentlyContinue
         Compress-Archive -Path "$sdkDir" -DestinationPath "$buildDir\osquery-sdk-windows-x64.zip" -Force
         Get-Item "$buildDir\osquery-sdk-windows-x64.zip"
 
