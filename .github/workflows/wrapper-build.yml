@@ -107,7 +107,7 @@ jobs:
         CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
       run: |
         ccache --zero-stats
-        cmake --build . -j $(($(nproc) + 1))
+        cmake --build . -j $(($(nproc) + 1)) --target osquery_wrapper
         ccache -s
 
     - name: Install SDK
@@ -262,7 +262,7 @@ jobs:
         CCACHE_DIR: ${{ steps.build_paths.outputs.CCACHE }}
       run: |
         ccache --zero-stats
-        cmake --build . -j $(($(sysctl -n hw.logicalcpu) + 1))
+        cmake --build . -j $(($(sysctl -n hw.logicalcpu) + 1)) --target osquery_wrapper
         ccache -s
 
     - name: Install SDK
@@ -458,7 +458,7 @@ jobs:
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         @echo on
         sccache.exe --zero-stats
-        cmake --build . -j %NUMBER_OF_PROCESSORS%
+        cmake --build . -j %NUMBER_OF_PROCESSORS% --target osquery_wrapper
         sccache.exe --show-stats
 
     - name: Install SDK
