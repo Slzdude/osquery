@@ -137,6 +137,16 @@ foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_THIRDPARTY_LIBS})
 endforeach()
 list(APPEND _DEPS "-lm -lpthread -ldl -lresolv -lrt")
 string(REPLACE ";" " " DEPS_LIBS "${_DEPS}")
+
+# C++ 运行时（osquery 用 libc++ 编译）
+if(OSQUERY_TOOLCHAIN_SYSROOT)
+  set(CXX_RUNTIME "${OSQUERY_TOOLCHAIN_SYSROOT}/usr/lib/libc++.a ${OSQUERY_TOOLCHAIN_SYSROOT}/usr/lib/libc++abi.a")
+elseif(DEFINED PLATFORM_MACOS)
+  set(CXX_RUNTIME "-lc++ -lc++abi")
+elseif(DEFINED PLATFORM_WINDOWS)
+  set(CXX_RUNTIME "")
+endif()
+
 set(COMPAT_STUB "")
 
 configure_file(

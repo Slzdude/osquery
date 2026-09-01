@@ -7,5 +7,5 @@ Name: @PROJECT_NAME@
 Description: osquery SQL engine C wrapper for GhostTrace
 Version: @OSQUERY_VERSION@
 Requires:
-Libs: -L${libdir} -losquery_wrapper -Wl,--whole-archive @SPECS_LIBS@ -Wl,--no-whole-archive -Wl,--allow-multiple-definition -Wl,--start-group @DEPS_LIBS@ @COMPAT_STUB@ -Wl,--end-group
+Libs: -L${libdir} -losquery_wrapper @SPECS_LIBS@ @DEPS_LIBS@ @COMPAT_STUB@ @CXX_RUNTIME@
 Cflags: -I${includedir}
