@@ -141,11 +141,12 @@ if(DEFINED PLATFORM_LINUX)
   )
 endif()
 
-# macOS 专属第三方库
+# macOS 专属第三方库（macOS 上不适用的 Linux 库已在 _THIRDPARTY_LINUX 中排除）
 set(_THIRDPARTY_MACOS "")
 if(DEFINED PLATFORM_MACOS)
   set(_THIRDPARTY_MACOS
-    # macOS 目前没有专属第三方库，按需添加
+    # macOS 使用系统 libmagic，不需要 thirdparty_libmagic
+    # macOS 使用系统 libarchive，不需要 thirdparty_libarchive（但 osquery 仍链接）
   )
 endif()
 
@@ -153,7 +154,8 @@ endif()
 set(_THIRDPARTY_WINDOWS "")
 if(DEFINED PLATFORM_WINDOWS)
   set(_THIRDPARTY_WINDOWS
-    # Windows 目前没有专属第三方库，按需添加
+    # Windows 使用 krabsetw 用于 ETW 事件
+    thirdparty_krabsetw
   )
 endif()
 
