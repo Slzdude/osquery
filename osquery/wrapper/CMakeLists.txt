@@ -37,54 +37,58 @@ install(FILES wrapper.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-# ── 安装所有传递依赖的静态库 ──────────────────────────────
+# ── 自动发现并安装所有传递依赖 ────────────────────────────
 
-# osquery 核心库
-set(_OSQUERY_LIBS
-  osquery_core osquery_core_init osquery_core_plugins osquery_core_sql
-  osquery_sql
-  osquery_database osquery_database_ephemeral
-  osquery_dispatcher
-  osquery_extensions osquery_extensions_implthrift osquery_extensions_extensionsinterface
-  osquery_filesystem osquery_hashing osquery_config
-  osquery_events osquery_events_eventsregistry
-  osquery_experimental_eventsstream_registry
-  osquery_logger_datalogger
-  osquery_process
-  osquery_numericmonitoring
-  osquery_registry
-  osquery_remote_enroll_tlsenroll
-  osquery_utils osquery_utils_conversions osquery_utils_info
-  osquery_utils_json osquery_utils_status osquery_utils_config
-  osquery_utils_pidfile osquery_utils_linux
-  osquery_utils_system_systemutils osquery_utils_system_boottime
-  osquery_utils_system_env osquery_utils_system_errno
-  osquery_utils_system_filepath osquery_utils_system_time osquery_utils_system_uptime
-  osquery_tables_system_systemtable osquery_tables_networking
-  osquery_tables_yara_yaratable osquery_tables_applications
-  osquery_tables_events_eventstable osquery_tables_utility_utilitytable
-  osquery_tables_forensic osquery_tables_sleuthkit_sleuthkittable
-  osquery_worker_ipc_tableipcjsonconverter
-  osquery_worker_ipc_linux_tablecontaineripc osquery_worker_ipc_linux_tableipc
-  osquery_worker_ipc_posix_pipechannel
-  osquery_worker_logging_glog_logger osquery_worker_system_linux_memory
-)
+# 递归收集目标的所有静态库传递依赖
+set(_COLLECTED_DEPS "")
+set(_SEEN_DEPS "")
+macro(collect_static_deps target)
+  if(NOT TARGET ${target})
+    return()
+  endif()
+  # 跳过已处理的目标
+  list(FIND _SEEN_DEPS "${target}" _idx)
+  if(NOT _idx EQUAL -1)
+    return()
+  endif()
+  list(APPEND _SEEN_DEPS "${target}")
 
-# 插件库
-set(_PLUGIN_LIBS
-  plugins_config_filesystemconfig plugins_config_parsers
-  plugins_database_sqliteplugin
-  plugins_logger_buffered plugins_logger_filesystemlogger plugins_logger_stdout plugins_logger_syslog
-  plugins_remote_enroll_tlsenroll
-)
+  get_target_property(_type ${target} TYPE)
+  if(_type STREQUAL "STATIC_LIBRARY")
+    list(APPEND _COLLECTED_DEPS "${target}")
+  endif()
 
-# 安装 osquery 和插件库
-foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS})
-  if(TARGET ${dep})
-    get_target_property(dep_type ${dep} TYPE)
-    if(dep_type STREQUAL "STATIC_LIBRARY")
-      install(FILES "$<TARGET_FILE:${dep}>" DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    endif()
+  # 递归处理 PUBLIC 和 INTERFACE 依赖
+  get_target_property(_pub_deps ${target} INTERFACE_LINK_LIBRARIES)
+  if(_pub_deps)
+    foreach(_dep ${_pub_deps})
+      if(TARGET "${_dep}")
+        collect_static_deps("${_dep}")
+      endif()
+    endforeach()
+  endif()
+
+  get_target_property(_link_deps ${target} LINK_LIBRARIES)
+  if(_link_deps)
+    foreach(_dep ${_link_deps})
+      if(TARGET "${_dep}")
+        collect_static_deps("${_dep}")
+      endif()
+    endforeach()
+  endif()
+endmacro()
+
+# 从 wrapper 开始递归收集
+collect_static_deps(osquery_wrapper)
+
+# 安装所有收集到的静态库
+foreach(dep ${_COLLECTED_DEPS})
+  get_target_property(_loc ${dep} IMPORTED_LOCATION)
+  if(_loc AND EXISTS "${_loc}")
+    install(FILES "${_loc}" DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  else()
+    # 非 IMPORTED 目标，从构建目录获取
+    install(FILES "$<TARGET_FILE:${dep}>" DESTINATION ${CMAKE_INSTALL_LIBDIR})
   endif()
 endforeach()
 
@@ -127,23 +131,10 @@ foreach(tgt codegen_native_tables codegen_foreign_tables)
 endforeach()
 string(REPLACE ";" " " SPECS_LIBS "${_SPECS_LIBS}")
 
-# 收集所有依赖库路径
+# 使用自动发现的依赖列表生成 pkg-config
 set(_DEPS "")
-foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS})
-  if(TARGET ${dep})
-    get_target_property(dep_type ${dep} TYPE)
-    if(dep_type STREQUAL "STATIC_LIBRARY")
-      list(APPEND _DEPS "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${dep}.a")
-    endif()
-  endif()
-endforeach()
-
-# 第三方库
-foreach(lib openssl gflags glog)
-  set(_tgt "thirdparty_${lib}")
-  if(TARGET ${_tgt})
-    list(APPEND _DEPS "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${_tgt}.a")
-  endif()
+foreach(dep ${_COLLECTED_DEPS})
+  list(APPEND _DEPS "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/lib${dep}.a")
 endforeach()
 
 # 系统库
