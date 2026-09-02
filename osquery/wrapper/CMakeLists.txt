@@ -166,53 +166,41 @@ set(_ALL_THIRDPARTY ${_THIRDPARTY_CROSS} ${_THIRDPARTY_LINUX} ${_THIRDPARTY_MACO
 # 这样 MinGW (Go CGO) 只需链接这一个 .lib，无需解析 C++ 符号
 
 if(DEFINED PLATFORM_WINDOWS)
-  # 收集所有需要合并的库
-  set(_COMBINE_LIBS
-    $<TARGET_FILE:osquery_wrapper>
-  )
+  # 使用 install 后的文件路径（而非 CMake target 引用）
+  # 因为部分 target 可能不存在或名称不匹配
+  install(CODE "
+    set(_sdk_lib \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+    set(_combined \"\${_sdk_lib}/osquery_combined.lib\")
 
-  # osquery 核心库
-  foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS})
-    if(TARGET ${dep})
-      get_target_property(dep_type ${dep} TYPE)
-      if(dep_type STREQUAL "STATIC_LIBRARY")
-        list(APPEND _COMBINE_LIBS $<TARGET_FILE:${dep}>)
+    # 收集所有已安装的 .lib 文件（排除 rocksdb、rdkafka、combined 自身）
+    file(GLOB _all_libs \"\${_sdk_lib}/*.lib\")
+    set(_merge_libs \"\")
+    foreach(lib \${_all_libs})
+      get_filename_component(_name \"\${lib}\" NAME)
+      if(NOT _name MATCHES \"rocksdb|rdkafka|osquery_combined\")
+        list(APPEND _merge_libs \"\${lib}\")
+      endif()
+    endforeach()
+
+    # 加入 specs 表库
+    file(GLOB _spec_libs \"\${_sdk_lib}/deps/*.lib\")
+    foreach(lib \${_spec_libs})
+      list(APPEND _merge_libs \"\${lib}\")
+    endforeach()
+
+    # 使用 lib.exe 合并
+    if(_merge_libs)
+      execute_process(
+        COMMAND lib.exe /nologo /OUT:\${_combined} \${_merge_libs}
+        RESULT_VARIABLE _result
+      )
+      if(_result EQUAL 0)
+        message(STATUS \"Combined library created: \${_combined}\")
+      else()
+        message(WARNING \"lib.exe merge failed (code \${_result}), skipping combined .lib\")
       endif()
     endif()
-  endforeach()
-
-  # 第三方库
-  foreach(dep ${_ALL_THIRDPARTY})
-    if(TARGET ${dep})
-      get_target_property(dep_type ${dep} TYPE)
-      if(dep_type STREQUAL "STATIC_LIBRARY")
-        list(APPEND _COMBINE_LIBS $<TARGET_FILE:${dep}>)
-      endif()
-    endif()
-  endforeach()
-
-  # specs 表库
-  foreach(tgt codegen_native_tables codegen_foreign_tables)
-    if(TARGET ${tgt})
-      list(APPEND _COMBINE_LIBS $<TARGET_FILE:${tgt}>)
-    endif()
-  endforeach()
-
-  # 使用 lib.exe 合并所有 .lib 为单一文件
-  add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/osquery_combined.lib
-    COMMAND lib.exe /nologo /OUT:${CMAKE_CURRENT_BINARY_DIR}/osquery_combined.lib ${_COMBINE_LIBS}
-    DEPENDS osquery_wrapper ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_ALL_THIRDPARTY}
-    COMMENT "Combining all libraries into osquery_combined.lib"
-  )
-
-  add_custom_target(osquery_wrapper_combined ALL
-    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/osquery_combined.lib
-  )
-
-  # 安装合并后的 .lib
-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/osquery_combined.lib
-    DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  ")
 endif()
 
 # ── 安装规则 ────────────────────────────────────────────────

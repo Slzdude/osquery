@@ -458,10 +458,10 @@ jobs:
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         @echo on
         sccache.exe --zero-stats
-        cmake --build . -j %NUMBER_OF_PROCESSORS% --target osquery_wrapper osquery_wrapper_combined
+        cmake --build . -j %NUMBER_OF_PROCESSORS% --target osquery_wrapper
         sccache.exe --show-stats
 
-    - name: Install SDK
+    - name: Install SDK (with combined .lib)
       working-directory: ${{ steps.build_paths.outputs.BINARY }}
       shell: cmd
       run: |
@@ -481,14 +481,18 @@ jobs:
         Get-ChildItem -Path "$buildDir" -Filter "libcodegen_foreign_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
         # Copy .lib files from osquery, plugins, libs, specs (exclude rocksdb and rdkafka)
         Get-ChildItem -Path "$buildDir\osquery","$buildDir\plugins","$buildDir\libs","$buildDir\specs" -Filter "*.lib" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "rocksdb|rdkafka" } | Copy-Item -Destination "$sdkDir\lib\" -ErrorAction SilentlyContinue
-        # Copy combined .lib (for MinGW cross-linking)
-        $combinedLib = "$buildDir\osquery\wrapper\osquery_combined.lib"
-        if (Test-Path $combinedLib) {
-          Copy-Item -Path $combinedLib -Destination "$sdkDir\lib\"
-          Write-Host "Combined .lib copied: $((Get-Item $combinedLib).Length / 1MB) MB"
-        }
         # Copy wrapper header
-        Copy-Item -Path "${{ steps.build_paths.outputs.SOURCE }}\osquery\wrapper\wrapper.h" -Destination "$sdkDir\include\"
+        $wrapperH = Join-Path "${{ steps.build_paths.outputs.SOURCE }}" "osquery\wrapper\wrapper.h"
+        if (Test-Path $wrapperH) {
+          Copy-Item -Path $wrapperH -Destination "$sdkDir\include\"
+        }
+        # Check combined .lib
+        $combinedLib = "$sdkDir\lib\osquery_combined.lib"
+        if (Test-Path $combinedLib) {
+          Write-Host "Combined .lib: $((Get-Item $combinedLib).Length / 1MB) MB"
+        } else {
+          Write-Host "WARNING: osquery_combined.lib not found"
+        }
         Compress-Archive -Path "$sdkDir" -DestinationPath "$buildDir\osquery-sdk-windows-x64.zip" -Force
         Get-Item "$buildDir\osquery-sdk-windows-x64.zip"
 
