@@ -475,12 +475,13 @@ jobs:
       shell: cmd
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        setlocal enabledelayedexpansion
         @echo on
 
         set SDK=w\osquery-sdk\lib
+        set LIBS=
 
         REM 收集所有 .lib（排除 rocksdb、rdkafka、combined）
-        set LIBS=
         for %%f in ("%SDK%\*.lib") do (
             echo %%~nxf | findstr /i "rocksdb rdkafka osquery_combined" >nul
             if errorlevel 1 set LIBS=!LIBS! "%%f"
@@ -489,8 +490,8 @@ jobs:
             set LIBS=!LIBS! "%%f"
         )
 
-        echo Merging %SDK%\osquery_combined.lib ...
-        lib.exe /nologo /OUT:"%SDK%\osquery_combined.lib" %LIBS%
+        echo Merging into osquery_combined.lib ...
+        lib.exe /nologo /OUT:"%SDK%\osquery_combined.lib" !LIBS!
         if errorlevel 1 (
             echo ERROR: lib.exe failed
             exit /b 1
