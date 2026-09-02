@@ -162,46 +162,9 @@ endif()
 set(_ALL_THIRDPARTY ${_THIRDPARTY_CROSS} ${_THIRDPARTY_LINUX} ${_THIRDPARTY_MACOS} ${_THIRDPARTY_WINDOWS})
 
 # ── Windows 合并静态库 ──────────────────────────────────────
-# 将 wrapper + 所有 osquery 依赖合并为单一 .lib
+# 合并操作由 CI 的 "Build combined .lib" 步骤完成
+# 使用 lib.exe 将 wrapper + 所有依赖合并为 osquery_combined.lib
 # 这样 MinGW (Go CGO) 只需链接这一个 .lib，无需解析 C++ 符号
-
-if(DEFINED PLATFORM_WINDOWS)
-  # 使用 install 后的文件路径（而非 CMake target 引用）
-  # 因为部分 target 可能不存在或名称不匹配
-  install(CODE "
-    set(_sdk_lib \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
-    set(_combined \"\${_sdk_lib}/osquery_combined.lib\")
-
-    # 收集所有已安装的 .lib 文件（排除 rocksdb、rdkafka、combined 自身）
-    file(GLOB _all_libs \"\${_sdk_lib}/*.lib\")
-    set(_merge_libs \"\")
-    foreach(lib \${_all_libs})
-      get_filename_component(_name \"\${lib}\" NAME)
-      if(NOT _name MATCHES \"rocksdb|rdkafka|osquery_combined\")
-        list(APPEND _merge_libs \"\${lib}\")
-      endif()
-    endforeach()
-
-    # 加入 specs 表库
-    file(GLOB _spec_libs \"\${_sdk_lib}/deps/*.lib\")
-    foreach(lib \${_spec_libs})
-      list(APPEND _merge_libs \"\${lib}\")
-    endforeach()
-
-    # 使用 lib.exe 合并
-    if(_merge_libs)
-      execute_process(
-        COMMAND lib.exe /nologo /OUT:\${_combined} \${_merge_libs}
-        RESULT_VARIABLE _result
-      )
-      if(_result EQUAL 0)
-        message(STATUS \"Combined library created: \${_combined}\")
-      else()
-        message(WARNING \"lib.exe merge failed (code \${_result}), skipping combined .lib\")
-      endif()
-    endif()
-  ")
-endif()
 
 # ── 安装规则 ────────────────────────────────────────────────
 
