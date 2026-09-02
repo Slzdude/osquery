@@ -161,6 +161,60 @@ endif()
 
 set(_ALL_THIRDPARTY ${_THIRDPARTY_CROSS} ${_THIRDPARTY_LINUX} ${_THIRDPARTY_MACOS} ${_THIRDPARTY_WINDOWS})
 
+# ── Windows 合并静态库 ──────────────────────────────────────
+# 将 wrapper + 所有 osquery 依赖合并为单一 .lib
+# 这样 MinGW (Go CGO) 只需链接这一个 .lib，无需解析 C++ 符号
+
+if(DEFINED PLATFORM_WINDOWS)
+  # 收集所有需要合并的库
+  set(_COMBINE_LIBS
+    $<TARGET_FILE:osquery_wrapper>
+  )
+
+  # osquery 核心库
+  foreach(dep ${_OSQUERY_LIBS} ${_PLUGIN_LIBS})
+    if(TARGET ${dep})
+      get_target_property(dep_type ${dep} TYPE)
+      if(dep_type STREQUAL "STATIC_LIBRARY")
+        list(APPEND _COMBINE_LIBS $<TARGET_FILE:${dep}>)
+      endif()
+    endif()
+  endforeach()
+
+  # 第三方库
+  foreach(dep ${_ALL_THIRDPARTY})
+    if(TARGET ${dep})
+      get_target_property(dep_type ${dep} TYPE)
+      if(dep_type STREQUAL "STATIC_LIBRARY")
+        list(APPEND _COMBINE_LIBS $<TARGET_FILE:${dep}>)
+      endif()
+    endif()
+  endforeach()
+
+  # specs 表库
+  foreach(tgt codegen_native_tables codegen_foreign_tables)
+    if(TARGET ${tgt})
+      list(APPEND _COMBINE_LIBS $<TARGET_FILE:${tgt}>)
+    endif()
+  endforeach()
+
+  # 使用 lib.exe 合并所有 .lib 为单一文件
+  add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/osquery_combined.lib
+    COMMAND lib.exe /nologo /OUT:${CMAKE_CURRENT_BINARY_DIR}/osquery_combined.lib ${_COMBINE_LIBS}
+    DEPENDS osquery_wrapper ${_OSQUERY_LIBS} ${_PLUGIN_LIBS} ${_ALL_THIRDPARTY}
+    COMMENT "Combining all libraries into osquery_combined.lib"
+  )
+
+  add_custom_target(osquery_wrapper_combined ALL
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/osquery_combined.lib
+  )
+
+  # 安装合并后的 .lib
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/osquery_combined.lib
+    DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
+
 # ── 安装规则 ────────────────────────────────────────────────
 
 # wrapper + header
