@@ -470,57 +470,35 @@ jobs:
         cmake --install . --prefix w\osquery-sdk 2>nul
         exit /b 0
 
-    - name: Build combined .lib
-      working-directory: ${{ steps.build_paths.outputs.BINARY }}
-      shell: cmd
-      run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-        setlocal enabledelayedexpansion
-        @echo on
-
-        set SDK=w\osquery-sdk\lib
-        set LIBS=
-
-        REM 收集所有 .lib（排除 rocksdb、rdkafka、combined）
-        for %%f in ("%SDK%\*.lib") do (
-            echo %%~nxf | findstr /i "rocksdb rdkafka osquery_combined" >nul
-            if errorlevel 1 set LIBS=!LIBS! "%%f"
-        )
-        for %%f in ("%SDK%\deps\*.lib") do (
-            set LIBS=!LIBS! "%%f"
-        )
-
-        echo Merging into osquery_combined.lib ...
-        lib.exe /nologo /OUT:"%SDK%\osquery_combined.lib" !LIBS!
-        if errorlevel 1 (
-            echo ERROR: lib.exe failed
-            exit /b 1
-        )
-        dir "%SDK%\osquery_combined.lib"
-
-    - name: Package SDK
+    - name: Package SDK (DLL)
       shell: powershell
       run: |
         $sdkDir = "${{ steps.build_paths.outputs.BINARY }}\w\osquery-sdk"
         $buildDir = "${{ steps.build_paths.outputs.BINARY }}"
-        New-Item -ItemType Directory -Force -Path "$sdkDir\lib\deps"
-        # Copy specs tables
-        Get-ChildItem -Path "$buildDir" -Filter "libcodegen_native_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
-        Get-ChildItem -Path "$buildDir" -Filter "libcodegen_foreign_tables*" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$sdkDir\lib\deps\"
-        # Copy .lib files from osquery, plugins, libs, specs (exclude rocksdb and rdkafka)
-        Get-ChildItem -Path "$buildDir\osquery","$buildDir\plugins","$buildDir\libs","$buildDir\specs" -Filter "*.lib" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "rocksdb|rdkafka" } | Copy-Item -Destination "$sdkDir\lib\" -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path "$sdkDir\bin" -ErrorAction SilentlyContinue
+
+        # Copy DLL (osquery_wrapper.dll contains all osquery code)
+        $dll = Get-ChildItem -Path "$buildDir" -Filter "osquery_wrapper.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($dll) {
+          Copy-Item -Path $dll.FullName -Destination "$sdkDir\bin\"
+          Write-Host "DLL copied: $([math]::Round($dll.Length / 1MB, 1)) MB"
+        } else {
+          Write-Host "WARNING: osquery_wrapper.dll not found"
+        }
+
+        # Copy import library (.lib for linking)
+        $implib = Get-ChildItem -Path "$buildDir" -Filter "osquery_wrapper.lib" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($implib) {
+          Copy-Item -Path $implib.FullName -Destination "$sdkDir\lib\"
+          Write-Host "Import lib copied: $([math]::Round($implib.Length / 1KB, 1)) KB"
+        }
+
         # Copy wrapper header
         $wrapperH = Join-Path "${{ steps.build_paths.outputs.SOURCE }}" "osquery\wrapper\wrapper.h"
         if (Test-Path $wrapperH) {
           Copy-Item -Path $wrapperH -Destination "$sdkDir\include\"
         }
-        # Check combined .lib
-        $combinedLib = "$sdkDir\lib\osquery_combined.lib"
-        if (Test-Path $combinedLib) {
-          Write-Host "Combined .lib: $((Get-Item $combinedLib).Length / 1MB) MB"
-        } else {
-          Write-Host "WARNING: osquery_combined.lib not found"
-        }
+
         Compress-Archive -Path "$sdkDir" -DestinationPath "$buildDir\osquery-sdk-windows-x64.zip" -Force
         Get-Item "$buildDir\osquery-sdk-windows-x64.zip"
 

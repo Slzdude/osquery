@@ -4,13 +4,26 @@
 
 include(GNUInstallDirs)
 
-# ── Wrapper 静态库 ──────────────────────────────────────────
+# ── Wrapper 库 ──────────────────────────────────────────────
+# Windows: 编译为 DLL（避免 MSVC/MinGW ABI 不兼容）
+# Linux/macOS: 编译为静态库
 
 set(_WRAPPER_SOURCES wrapper.cpp)
 
-add_osquery_library(osquery_wrapper STATIC
-  ${_WRAPPER_SOURCES}
-)
+if(DEFINED PLATFORM_WINDOWS)
+  add_osquery_library(osquery_wrapper SHARED
+    ${_WRAPPER_SOURCES}
+  )
+  # 导出 extern "C" 符号
+  set_target_properties(osquery_wrapper PROPERTIES
+    WINDOWS_EXPORT_ALL_SYMBOLS OFF
+    DEFINE_SYMBOL "OSQUERY_WRAPPER_EXPORTS"
+  )
+else()
+  add_osquery_library(osquery_wrapper STATIC
+    ${_WRAPPER_SOURCES}
+  )
+endif()
 
 # ── 链接依赖（按平台区分）──────────────────────────────────
 
@@ -161,10 +174,9 @@ endif()
 
 set(_ALL_THIRDPARTY ${_THIRDPARTY_CROSS} ${_THIRDPARTY_LINUX} ${_THIRDPARTY_MACOS} ${_THIRDPARTY_WINDOWS})
 
-# ── Windows 合并静态库 ──────────────────────────────────────
-# 合并操作由 CI 的 "Build combined .lib" 步骤完成
-# 使用 lib.exe 将 wrapper + 所有依赖合并为 osquery_combined.lib
-# 这样 MinGW (Go CGO) 只需链接这一个 .lib，无需解析 C++ 符号
+# ── Windows DLL ─────────────────────────────────────────────
+# Windows 编译为 DLL，包含所有 osquery 代码
+# Go 通过 syscall.LoadLibrary 加载，无需静态链接
 
 # ── 安装规则 ────────────────────────────────────────────────
 
