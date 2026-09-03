@@ -284,7 +284,22 @@ if(DEFINED PLATFORM_LINUX OR DEFINED PLATFORM_MACOS)
     set(_GROUP_START "-Wl,--start-group")
     set(_GROUP_END "-Wl,--end-group")
   elseif(DEFINED PLATFORM_MACOS)
-    set(_SYSTEM_LIBS "-lm -lpthread")
+    # macOS 框架（与 cmake/flags.cmake 保持一致）
+    set(_SYSTEM_LIBS "-lm -lpthread -lobjc"
+      "-framework AppKit"
+      "-framework Foundation"
+      "-framework CoreServices"
+      "-framework CoreFoundation"
+      "-framework CoreLocation"
+      "-framework CoreWLAN"
+      "-framework CoreGraphics"
+      "-framework DiskArbitration"
+      "-framework IOKit"
+      "-framework OpenDirectory"
+      "-framework Security"
+      "-framework ServiceManagement"
+      "-framework SystemConfiguration"
+    )
     # macOS 用 -force_load 替代 --whole-archive
     set(_WHOLE_ARCHIVE_START "")
     set(_WHOLE_ARCHIVE_END "")
