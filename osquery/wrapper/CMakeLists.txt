@@ -291,11 +291,16 @@ if(DEFINED PLATFORM_LINUX OR DEFINED PLATFORM_MACOS)
     set(_EXTRA_LDFLAGS "")
     set(_GROUP_START "")
     set(_GROUP_END "")
-    # 为每个需要 whole-archive 的库生成 -force_load
+    # specs 表也需要 -force_load
     set(_FORCE_LOAD "")
+    foreach(spec ${_SPECS})
+      set(_FORCE_LOAD "${_FORCE_LOAD} -force_load ${spec}")
+    endforeach()
+    # 事件库也需要 -force_load
     foreach(lib ${_WHOLE_ARCHIVE_LIBS})
       set(_FORCE_LOAD "${_FORCE_LOAD} -force_load ${lib}")
     endforeach()
+    set(_SPECS "")
     set(_WHOLE_ARCHIVE_LIBS "${_FORCE_LOAD}")
   endif()
 
