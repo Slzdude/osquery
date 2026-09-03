@@ -254,6 +254,8 @@ jobs:
           -DOSQUERY_BUILD_TESTS=OFF \
           -DOSQUERY_BUILD_AWS=OFF \
           -DOSQUERY_VERSION="${{ steps.version.outputs.VALUE }}" \
+          -DCMAKE_CXX_FLAGS="-fno-objc-msgsend-selector-stubs" \
+          -DCMAKE_OBJCXX_FLAGS="-fno-objc-msgsend-selector-stubs" \
           "${{ steps.build_paths.outputs.SOURCE }}"
 
     - name: Build
